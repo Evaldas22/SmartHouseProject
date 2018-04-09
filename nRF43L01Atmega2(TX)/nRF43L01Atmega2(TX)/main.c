@@ -36,7 +36,7 @@ void receive_data(void);
 void resetNrf(void);
 void changeNrfToRX();
 void changeNrfToTX();
-void GetDataFromDHT11();
+void SendDHT11Data();
 void Request();
 void Response();
 uint8_t Receive_data_DHT11();
@@ -48,7 +48,7 @@ volatile uint8_t TX = 0;
 
 // global var for DHT11 sensor
 uint8_t I_RH,D_RH,I_Temp,D_Temp,CheckSum, temp = 0;
-float humidity, temperature;
+int8_t humidity, temperature;
 
 volatile uint8_t dataToSend[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
 
@@ -75,7 +75,6 @@ int main(void)
 	resetNrf();
 	
 	Uart_Send_String("Working\n");
-	GetDataFromDHT11();
 	
     while (1) 
     {
@@ -83,13 +82,13 @@ int main(void)
     }
 }
 
-void SendAnswer()
+void SendAnswer(uint8_t *data)
 {
 	sei();
 	resetNrf();
 	TX = 1; // update status
 	changeNrfToTX(); // change to TX mode
-	transmit_data(dataToSend); // transmit data
+	transmit_data(data); // transmit data
 	_delay_us(100); // some delay for safe transmission
 	TX = 0; // upload status to indicate TX is done
 	changeNrfToRX(); // change back to RX mode
@@ -310,7 +309,7 @@ ISR(INT0_vect)
 			//respond = 1;
 			Uart_Send_String("Received request\r\n");
 			Uart_Send_String("Sending back\r\n");
-			SendAnswer();
+			SendAnswer(dataToSend);
 		}
 	}
 	else if(TX == 1)
@@ -324,39 +323,41 @@ ISR(INT0_vect)
 	sei(); // re-enable interrupts again
 }
 
-void GetDataFromDHT11()
+void SendDHT11Data()
 {
-	Request();		/* send start pulse */
-	Response();		/* receive response */
-	I_RH=Receive_data_DHT11();	/* store first eight bit in I_RH */
-	D_RH=Receive_data_DHT11();	/* store next eight bit in D_RH */
-	I_Temp=Receive_data_DHT11();	/* store next eight bit in I_Temp */
-	D_Temp=Receive_data_DHT11();	/* store next eight bit in D_Temp */
-	CheckSum=Receive_data_DHT11();/* store next eight bit in CheckSum */
-	
-	Uart_Send_String("Received data from DHT11 is:\n");
-	
-	char temp1[2], dregme1[2];
-	sprintf(temp1, "%d", I_Temp);
-	Uart_Send_String("Temp:");
-	Uart_Send_String(temp1); Uart_Send_String("\n");
-	
-	sprintf(dregme1, "%d", I_RH);
-	Uart_Send_String("Dregme:");
-	Uart_Send_String(dregme1); Uart_Send_String("\n");
+	Request();		//send start pulse 
+	Response();		// receive response 
+	humidity = Receive_data_DHT11();	// store first eight bit in I_RH 
+	D_RH =Receive_data_DHT11();			// store next eight bit in D_RH 
+	temperature = Receive_data_DHT11();	// store next eight bit in I_Temp 
+	D_Temp = Receive_data_DHT11();		// store next eight bit in D_Temp 
+	CheckSum = Receive_data_DHT11();	// store next eight bit in CheckSum 
 	
 	// check sum
 	if ((I_RH + D_RH + I_Temp + D_Temp) != CheckSum)
 	{
-		// Do smth
+		Uart_Send_String("Error with check sum\n");
 	}
 	else
 	{
-		I_RH &= 0x7F;
+		/*
+		//I_RH &= 0x7F;
 		humidity = I_RH;
-		I_Temp &= 0x7F;
-		temperature = I_RH;
+		//I_Temp &= 0x7F;
+		temperature = I_Temp;
+		*/
 	}
+	// display via uart
+	char temp[2], dregme[2];
+	sprintf(temp, "%d", temperature);
+	Uart_Send_String("Temperature: "); Uart_Send_String(temp); Uart_Send_String("\n");
+	
+	sprintf(dregme, "%d", humidity);
+	Uart_Send_String("Dregme: "); Uart_Send_String(dregme); Uart_Send_String("\n");
+	
+	// send actual data back
+	uint8_t answer[5] = {0x55, 0x55, 0x55, temperature, humidity};
+	SendAnswer(answer);
 	
 	_delay_ms(1100); // sampling period is 1 second. If less, DHT will fail
 }
