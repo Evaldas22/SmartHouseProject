@@ -27,7 +27,6 @@
 // Functions
 void SendAnswer();
 uint8_t ReadRegister(uint8_t register);
-//void WriteByteToNRF(uint8_t reg, uint8_t data);
 uint8_t *ReadWriteNRF(uint8_t R_W, uint8_t reg, uint8_t *data, uint8_t size);
 void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode);
 void transmit_data(uint8_t *data);
@@ -39,8 +38,6 @@ void changeNrfToTX();
 // global variable for storing any received data
 volatile uint8_t *data;
 volatile uint8_t TX = 0;
-//volatile uint8_t respond = 0;
-//volatile uint8_t retries = 0;
 
 volatile uint8_t dataToSend[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
 
@@ -70,22 +67,7 @@ int main(void)
 	
     while (1) 
     {
-		// at this point TX = 0, respond = 0, RX mode
 		receive_data();
-		//if (respond) // after received message respond = 1
-		//{
-			//TX = 1; // update status
-			//changeNrfToTX(); // change to TX mode
-			//while (retries < 4)
-			//{
-				//transmit_data(dataToSend); // transmit data
-				//_delay_us(100); // some delay for safe transmission
-			//}
-			//retries = 0;
-			//TX = 0; // upload status to indicate TX is done
-			//changeNrfToRX(); // change back to RX mode
-			//respond = 0;
-		//}
     }
 }
 
@@ -101,7 +83,7 @@ void SendAnswer()
 	changeNrfToRX(); // change back to RX mode
 }
 
-/*
+
 // reg is memory address
 uint8_t ReadRegister(uint8_t reg)
 {
@@ -116,21 +98,6 @@ uint8_t ReadRegister(uint8_t reg)
 	set_bit(PORTB, SS); // deselect nRF -> finish procedure
 	return reg;
 }
-
-
-// reg is memory address. This function only send one byte of data
-void WriteByteToNRF(uint8_t reg, uint8_t data)
-{
-	_delay_us(10); // profilaktiskas laukimas
-	clear_bit(PORTB, SS); // select slave (nRF)
-	_delay_us(10);
-	spi_Send_Receive(W_REGISTER + reg); // write to specified register 'reg'
-	_delay_us(10);
-	spi_Send_Receive(data); // shift data into specified register
-	_delay_us(10);
-	set_bit(PORTB, SS); // disable slave
-}
-*/
 
 // fucntion to read/write to nrf multiple bytes
 uint8_t *ReadWriteNRF(uint8_t R_W, uint8_t reg, uint8_t *data, uint8_t size)
