@@ -14,6 +14,7 @@
 #include <avr/io.h>
 #include <util/delay.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <avr/interrupt.h>
 #include "SPI.h"
 #include "nRF24L01.h"
@@ -23,6 +24,7 @@
 // defines
 #define W 1
 #define R 0
+#define DHT11_PIN 6
 
 // Functions
 void SendAnswer();
@@ -34,10 +36,19 @@ void receive_data(void);
 void resetNrf(void);
 void changeNrfToRX();
 void changeNrfToTX();
+void GetDataFromDHT11();
+void Request();
+void Response();
+uint8_t Receive_data_DHT11();
 
 // global variable for storing any received data
 volatile uint8_t *data;
+// global var to now in ISR if TX or RX operation is performed
 volatile uint8_t TX = 0;
+
+// global var for DHT11 sensor
+uint8_t I_RH,D_RH,I_Temp,D_Temp,CheckSum, temp = 0;
+float humidity, temperature;
 
 volatile uint8_t dataToSend[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
 
@@ -64,6 +75,7 @@ int main(void)
 	resetNrf();
 	
 	Uart_Send_String("Working\n");
+	GetDataFromDHT11();
 	
     while (1) 
     {
@@ -82,7 +94,6 @@ void SendAnswer()
 	TX = 0; // upload status to indicate TX is done
 	changeNrfToRX(); // change back to RX mode
 }
-
 
 // reg is memory address
 uint8_t ReadRegister(uint8_t reg)
@@ -311,5 +322,75 @@ ISR(INT0_vect)
 	}
 	resetNrf();
 	sei(); // re-enable interrupts again
+}
+
+void GetDataFromDHT11()
+{
+	Request();		/* send start pulse */
+	Response();		/* receive response */
+	I_RH=Receive_data_DHT11();	/* store first eight bit in I_RH */
+	D_RH=Receive_data_DHT11();	/* store next eight bit in D_RH */
+	I_Temp=Receive_data_DHT11();	/* store next eight bit in I_Temp */
+	D_Temp=Receive_data_DHT11();	/* store next eight bit in D_Temp */
+	CheckSum=Receive_data_DHT11();/* store next eight bit in CheckSum */
+	
+	Uart_Send_String("Received data from DHT11 is:\n");
+	
+	char temp1[2], dregme1[2];
+	sprintf(temp1, "%d", I_Temp);
+	Uart_Send_String("Temp:");
+	Uart_Send_String(temp1); Uart_Send_String("\n");
+	
+	sprintf(dregme1, "%d", I_RH);
+	Uart_Send_String("Dregme:");
+	Uart_Send_String(dregme1); Uart_Send_String("\n");
+	
+	// check sum
+	if ((I_RH + D_RH + I_Temp + D_Temp) != CheckSum)
+	{
+		// Do smth
+	}
+	else
+	{
+		I_RH &= 0x7F;
+		humidity = I_RH;
+		I_Temp &= 0x7F;
+		temperature = I_RH;
+	}
+	
+	_delay_ms(1100); // sampling period is 1 second. If less, DHT will fail
+}
+
+void Request()
+{
+	set_bit(DDRD, DHT11_PIN);		//set as output
+	clear_bit(PORTD, DHT11_PIN);	// set to low pin 
+	_delay_ms(20);					// wait for 20ms 
+	set_bit(PORTD, DHT11_PIN);		// set to high pin 
+}
+
+void Response()
+{
+	clear_bit(DDRD, DHT11_PIN);			// now set as input		
+	while(check_bit(PIND, DHT11_PIN));		// wait for first response(20-40uS)
+	while((check_bit(PIND, DHT11_PIN))==0);	// wait for LOW response(80uS)
+	while(check_bit(PIND, DHT11_PIN));		// wait for preparation HIGH(80uS)
+}
+
+uint8_t Receive_data_DHT11()
+{
+	for (int q=0; q<8; q++)
+	{
+		while(!(check_bit(PIND, DHT11_PIN)));  // while first part is LOW
+		
+		_delay_us(30); // after 30us see what signal it is
+		// if still high - means it's "1"
+		if(check_bit(PIND, DHT11_PIN)) temp = (temp << 1) | 0x01;
+		// if it's low - means other bit started and this one was 0
+		else temp = temp << 1;
+		
+		while(check_bit(PIND, DHT11_PIN)); // wait for HIGH signal to end
+	}
+	return temp;
 }
 
