@@ -293,7 +293,8 @@ void changeNrfToTX()
 	_delay_ms(100);
 }
 
-// this interrupt will be triggered when transmission is succesfull
+// this interrupt will be triggered when transmission/receive is succesfull
+// this handles all the answers that need to be sent
 ISR(INT0_vect)
 {
 	cli(); // disable interrupt 
@@ -306,19 +307,15 @@ ISR(INT0_vect)
 		// if message is for this atmega
 		if (data[4] == 0x16)
 		{
-			//respond = 1;
 			Uart_Send_String("Received request\r\n");
 			Uart_Send_String("Sending back\r\n");
-			SendAnswer(dataToSend);
+			Uart_Send_String("Command:"); Uart_Transmit(data[3]);
+			Uart_Send_String("\n");
+			if(data[3] == 0x70) SendDHT11Data();
+			else SendAnswer(dataToSend);
 		}
 	}
-	else if(TX == 1)
-	{
-		// if TX is successful exit the while loop in main
-		//retries = 5;
-		//respond = 0;
-		Uart_Send_String("Transmitted back");
-	}
+	
 	resetNrf();
 	sei(); // re-enable interrupts again
 }
@@ -356,7 +353,7 @@ void SendDHT11Data()
 	Uart_Send_String("Dregme: "); Uart_Send_String(dregme); Uart_Send_String("\n");
 	
 	// send actual data back
-	uint8_t answer[5] = {0x55, 0x55, 0x55, temperature, humidity};
+	uint8_t answer[5] = {0x41, 0x42, 0x43, temperature, humidity};
 	SendAnswer(answer);
 	
 	_delay_ms(1100); // sampling period is 1 second. If less, DHT will fail
