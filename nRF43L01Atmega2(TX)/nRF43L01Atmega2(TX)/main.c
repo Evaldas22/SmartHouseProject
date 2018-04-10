@@ -8,9 +8,8 @@
 // MCU clock
 #define F_CPU 16000000UL
 
-// includes
+// ----------------------------includes----------------------------
 #include "Basic_operations.h"
-
 #include <avr/io.h>
 #include <util/delay.h>
 #include <stdint.h>
@@ -21,8 +20,9 @@
 #include "UART.h"
 #include "ExternalInterrupts.h"
 #include "ButtonPressed.h"
+// ---------------------------------------------------------------
 
-// defines
+// ---------------------------defines-----------------------------
 #define W 1
 #define R 0
 #define DHT11_PIN 6
@@ -30,7 +30,12 @@
 
 #define MAX_RETRIES 10
 
-// Functions
+#define BUTTON1 0xF1
+#define EMERGENCY_ANSWER 0x66
+#define DHT11_REQUEST 0x70
+// ---------------------------------------------------------------
+
+// --------------------------Functions----------------------------
 void SendAnswer();
 uint8_t ReadRegister(uint8_t register);
 uint8_t *ReadWriteNRF(uint8_t R_W, uint8_t reg, uint8_t *data, uint8_t size);
@@ -44,8 +49,8 @@ void SendDHT11Data();
 void Request();
 void Response();
 uint8_t Receive_data_DHT11();
-
 void CheckButtonState();
+// ---------------------------------------------------------------
 
 // global variable for storing any received data
 volatile uint8_t *data;
@@ -93,25 +98,29 @@ int main(void)
 
 void CheckButtonState()
 {
+	// if button is pressed
 	if(!check_bit(PIND, BUTTON_PIN)){
 		uint8_t retries = 0;
+		successfullySend = 0;
+		
 		Uart_Send_String("Button is pressed\n");
 		
+		// while data is not successfuly sent keep trying (no more than MAX_RETRIES)
 		while((successfullySend != 1) && (retries < MAX_RETRIES))
 		{
 			Uart_Send_String("Sending that to Rpi\n");
-			uint8_t buttonPressedData[5] = {0x41, 0x42, 0x43, 0x44, 0xF1};
+			uint8_t buttonPressedData[5] = {0x41, 0x42, 0x43, 0x44, BUTTON1};
 			SendAnswer(buttonPressedData);
+			// receive response 
 			receive_data();
 			retries++;
 		}
-		successfullySend = 0;
 	}
 }
 
 void SendAnswer(uint8_t *data)
 {
-	resetNrf();
+	resetNrf(); // clear all IRQs
 	changeNrfToTX(); // change to TX mode
 	transmit_data(data); // transmit data
 	_delay_us(100); // some delay for safe transmission
@@ -133,7 +142,7 @@ uint8_t ReadRegister(uint8_t reg)
 	return reg;
 }
 
-// fucntion to read/write to nrf multiple bytes
+// fucntion to read/write to/from nrf multiple bytes
 uint8_t *ReadWriteNRF(uint8_t R_W, uint8_t reg, uint8_t *data, uint8_t size)
 {
 	cli();
@@ -281,7 +290,7 @@ void receive_data(void)
 	resetNrf();
 }
 
-// after every received/transmitted payload IRQ must be reseted
+// after every received/transmitted payload IRQs must be reseted
 void resetNrf(void)
 {
 	_delay_us(10);
@@ -294,6 +303,7 @@ void resetNrf(void)
 	set_bit(PORTB, SS); // disable slave
 }
 
+// change nrf into receiver mode
 void changeNrfToRX()
 {
 	uint8_t values[1];
@@ -303,6 +313,7 @@ void changeNrfToRX()
 	_delay_ms(100);
 }
 
+// change nrf into transmitter mode
 void changeNrfToTX()
 {
 	uint8_t values[1];
@@ -312,25 +323,29 @@ void changeNrfToTX()
 	_delay_ms(100);
 }
 
-// this interrupt will be triggered when transmission/receive is succesfull
+// this interrupt will be triggered when received any data
 // this handles all the answers that need to be sent
 ISR(INT0_vect)
 {
 	// default answer
 	uint8_t dataToSend[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
+		
 	cli(); // disable interrupt 
 	clear_bit(PORTB, CE); // disable chip to stop listening
 	
+	// read data into global array
 	data = ReadWriteNRF(R, R_RX_PAYLOAD, data, 5);
 		
-	// if message is for this atmega
+	// if message is meant for this atmega
 	if (data[4] == 0x16)
 	{
-		Uart_Send_String("Received command: "); Uart_Transmit(data[3]);
-		Uart_Send_String("\n");
+		Uart_Send_String("Received request\n");
 		
-		if(data[3] == 0x70) SendDHT11Data();
-		else if(data[3] == 0x66) successfullySend = 1;
+		// if RPi is requesting for temperature and humidity
+		if(data[3] == DHT11_REQUEST) SendDHT11Data();
+		// if RPi successfully received emergency message
+		else if(data[3] == EMERGENCY_ANSWER) successfullySend = 1;
+		// if command was not recognised send default
 		else SendAnswer(dataToSend);
 	}
 	
@@ -352,6 +367,7 @@ void SendDHT11Data()
 	{
 		Uart_Send_String("Error with check sum\n");
 	}
+	
 	// display via uart
 	char temp[2], dregme[2];
 	sprintf(temp, "%d", temperature);
