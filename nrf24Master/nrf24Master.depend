@@ -1,0 +1,13 @@
+# depslib dependency file v1.0
+1523351013 source:/home/pi/Desktop/nrf24Master/main.c
+	"nRF24L01.h"
+	<wiringPi.h>
+	<bcm2835.h>
+	<stdio.h>
+	<stdint.h>
+	<time.h>
+
+1520850151 /home/pi/Desktop/nRF24L01.h
+
+1521190965 /home/pi/Desktop/nrf24Master/nRF24L01.h
+

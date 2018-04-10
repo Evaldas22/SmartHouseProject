@@ -20,9 +20,14 @@ humidity from dht11 sensor and sends it back
 All functions that was done by atmega1 is now done by RPi 3.
 
 Sometimes RPi doesn't receive packet from either one of two atmegas.
+
 ------------------------------------------------------------------------------------------------------------------------------------------------
 EDIT2:
 Atmega2 can now check the status of button attached to it. In the while loop it does the following: listen for 2s for commands from RPi, checks button state.
 When button state is sent, it waits for response from RPi. If correct response is not received it'll send 9 more times.
 
-
+------------------------------------------------------------------------------------------------------------------------------------------------
+EDIT3:
+Added RPi code. Solved RPi problem (not receiving packet from atmega sometimes) by placing code that send request and wait for response ir while 
+loop that sends request (maximum 10 times) until it receives answer.
+Also between commands, rpi listens for emergency messages (like button press on atmega) 
