@@ -11,6 +11,7 @@ All slaves will receive command and if that command is addressed to it, it will 
 Atmega2 will respond with 'ABCDE'
 Atmega3 will respond with 'PQRST'
 
+------------------------------------------------------------------------------------------------------------------------------------------------
 EDIT1:
 Both atmegas respond to request from Raspberry Pi 3.
 Atmega2 receives two types of commands - regular and dht11 sensor. To regular it responds with 'ABCDE', to dht11 sensor it read temperature and
@@ -19,3 +20,9 @@ humidity from dht11 sensor and sends it back
 All functions that was done by atmega1 is now done by RPi 3.
 
 Sometimes RPi doesn't receive packet from either one of two atmegas.
+------------------------------------------------------------------------------------------------------------------------------------------------
+EDIT2:
+Atmega2 can now check the status of button attached to it. In the while loop it does the following: listen for 2s for commands from RPi, checks button state.
+When button state is sent, it waits for response from RPi. If correct response is not received it'll send 9 more times.
+
+
