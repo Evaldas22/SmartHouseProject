@@ -20,11 +20,15 @@
 #include "nRF24L01.h"
 #include "UART.h"
 #include "ExternalInterrupts.h"
+#include "ButtonPressed.h"
 
 // defines
 #define W 1
 #define R 0
 #define DHT11_PIN 6
+#define BUTTON_PIN 4
+
+#define MAX_RETRIES 10
 
 // Functions
 void SendAnswer();
@@ -41,19 +45,23 @@ void Request();
 void Response();
 uint8_t Receive_data_DHT11();
 
+void CheckButtonState();
+
 // global variable for storing any received data
 volatile uint8_t *data;
-// global var to now in ISR if TX or RX operation is performed
-volatile uint8_t TX = 0;
+
+volatile uint8_t successfullySend = 0;
 
 // global var for DHT11 sensor
 uint8_t I_RH,D_RH,I_Temp,D_Temp,CheckSum, temp = 0;
 int8_t humidity, temperature;
 
-volatile uint8_t dataToSend[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
-
 int main(void)
 {
+	// init button
+	clear_bit(DDRD, BUTTON_PIN); // input
+	set_bit(PORTD, BUTTON_PIN); //pull-up
+	
 	// LED in PB0, LOW 
 	set_bit(DDRB, PB0);
 	set_bit(PORTB, PB0);
@@ -79,18 +87,34 @@ int main(void)
     while (1) 
     {
 		receive_data();
+		CheckButtonState();
     }
+}
+
+void CheckButtonState()
+{
+	if(!check_bit(PIND, BUTTON_PIN)){
+		uint8_t retries = 0;
+		Uart_Send_String("Button is pressed\n");
+		
+		while((successfullySend != 1) && (retries < MAX_RETRIES))
+		{
+			Uart_Send_String("Sending that to Rpi\n");
+			uint8_t buttonPressedData[5] = {0x41, 0x42, 0x43, 0x44, 0xF1};
+			SendAnswer(buttonPressedData);
+			receive_data();
+			retries++;
+		}
+		successfullySend = 0;
+	}
 }
 
 void SendAnswer(uint8_t *data)
 {
-	sei();
 	resetNrf();
-	TX = 1; // update status
 	changeNrfToTX(); // change to TX mode
 	transmit_data(data); // transmit data
 	_delay_us(100); // some delay for safe transmission
-	TX = 0; // upload status to indicate TX is done
 	changeNrfToRX(); // change back to RX mode
 }
 
@@ -152,11 +176,10 @@ uint8_t *ReadWriteNRF(uint8_t R_W, uint8_t reg, uint8_t *data, uint8_t size)
 
 void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode)
 {
-	// define 1 byte array
+	// define 5 byte array
 	uint8_t values[5];
 	
 	_delay_ms(100);
-	
 	
 	// enable auto acknowledgement for certaint pipe
 	values[0] = 0x01 + pipe;
@@ -236,10 +259,8 @@ void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode)
 
 void transmit_data(uint8_t *data)
 {
-	//retries++;
 	ReadWriteNRF(R, FLUSH_TX, data, 0); // clear the buffer
 	ReadWriteNRF(R, W_TX_PAYLOAD, data, 5); // because payload is 5 bytes
-	sei(); // if interrupts are used
 	
 	_delay_ms(10);
 	set_bit(PORTB, CE); // enable nrf for TX
@@ -254,12 +275,10 @@ void receive_data(void)
 	sei(); // enable interrupts if used
 	
 	set_bit(PORTB, CE); // enable for listening
-	/*
-	_delay_ms(1000);
+	_delay_ms(2000);
 	clear_bit(PORTB, CE); // stop listening
 	cli(); // disable all interrupts
 	resetNrf();
-	*/
 }
 
 // after every received/transmitted payload IRQ must be reseted
@@ -297,26 +316,24 @@ void changeNrfToTX()
 // this handles all the answers that need to be sent
 ISR(INT0_vect)
 {
+	// default answer
+	uint8_t dataToSend[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
 	cli(); // disable interrupt 
 	clear_bit(PORTB, CE); // disable chip to stop listening
 	
-	if (!TX)
-	{
-		data = ReadWriteNRF(R, R_RX_PAYLOAD, data, 5);
+	data = ReadWriteNRF(R, R_RX_PAYLOAD, data, 5);
 		
-		// if message is for this atmega
-		if (data[4] == 0x16)
-		{
-			Uart_Send_String("Received request\r\n");
-			Uart_Send_String("Sending back\r\n");
-			Uart_Send_String("Command:"); Uart_Transmit(data[3]);
-			Uart_Send_String("\n");
-			if(data[3] == 0x70) SendDHT11Data();
-			else SendAnswer(dataToSend);
-		}
+	// if message is for this atmega
+	if (data[4] == 0x16)
+	{
+		Uart_Send_String("Received command: "); Uart_Transmit(data[3]);
+		Uart_Send_String("\n");
+		
+		if(data[3] == 0x70) SendDHT11Data();
+		else if(data[3] == 0x66) successfullySend = 1;
+		else SendAnswer(dataToSend);
 	}
 	
-	resetNrf();
 	sei(); // re-enable interrupts again
 }
 
@@ -334,15 +351,6 @@ void SendDHT11Data()
 	if ((I_RH + D_RH + I_Temp + D_Temp) != CheckSum)
 	{
 		Uart_Send_String("Error with check sum\n");
-	}
-	else
-	{
-		/*
-		//I_RH &= 0x7F;
-		humidity = I_RH;
-		//I_Temp &= 0x7F;
-		temperature = I_Temp;
-		*/
 	}
 	// display via uart
 	char temp[2], dregme[2];
