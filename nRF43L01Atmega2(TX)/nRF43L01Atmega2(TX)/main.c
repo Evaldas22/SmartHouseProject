@@ -27,6 +27,7 @@
 #define R 0
 #define DHT11_PIN 6
 #define BUTTON_PIN 4
+#define RELAY1 PA1
 
 #define MAX_RETRIES 10
 
@@ -50,6 +51,8 @@ void Request();
 void Response();
 uint8_t Receive_data_DHT11();
 void CheckButtonState();
+void initRelays();
+void ToggleLights();
 // ---------------------------------------------------------------
 
 // global variable for storing any received data
@@ -89,10 +92,12 @@ int main(void)
 	
 	Uart_Send_String("Working\n");
 	
+	initRelays();
+	
     while (1) 
     {
 		receive_data();
-		CheckButtonState();
+		//CheckButtonState();
     }
 }
 
@@ -414,5 +419,19 @@ uint8_t Receive_data_DHT11()
 		while(check_bit(PIND, DHT11_PIN)); // wait for HIGH signal to end
 	}
 	return temp;
+}
+
+void initRelays()
+{
+	set_bit(DDRA, RELAY1);	// output
+	clear_bit(PORTA, RELAY1); // LOW
+}
+
+// this should send short signal to relay which will activate impulse relay
+void ToggleLights()
+{
+	set_bit(PORTA, RELAY1);
+	_delay_ms(50);
+	clear_bit(PORTA, RELAY1);
 }
 
