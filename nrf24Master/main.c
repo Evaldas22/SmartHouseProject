@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
-
 // ---------------------------------------------------------
 
 // ---------------------Defines-----------------------------
@@ -32,15 +31,14 @@
 #define EMERGENCY_ANSWER 0x66
 #define DHT11_REQUEST 0x70
 #define RELAY1_TOGGLE 0x51
-#define RELAY_ACK 0x61
-#define RELAY_FINAL_ACK 0x62
 
-#define TIME_INTERVAL_SEC 5 // 1 minute
+#define TIME_INTERVAL_SEC 10 // 1 minute
 #define MAX_RETRIES 10
 
 // Some pins
 #define CE RPI_GPIO_P1_22 // GPIO25
 #define SS RPI_GPIO_P1_18 // GPIO24. I'll use this to manually control NRF Slave select pin
+#define IRQ_PIN 29 // GPIO21
 // ---------------------------------------------------------
 
 //-------------------------functions------------------------
@@ -50,21 +48,30 @@ uint8_t * ReadWriteNRF(uint8_t R_W, uint8_t reg, uint8_t *data, uint8_t size);
 void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode);
 void transmit_data(uint8_t *data);
 void receive_data(int command);
+void ISR();
 void resetNrf(void);
 void changeNrfToRX();
 void changeNrfToTX();
-void SendAck(uint8_t *ack);
 // ---------------------------------------------------------
 
 volatile uint8_t sendSuccessfully = 0;
+volatile uint8_t sendingRelayCommand = 0;
 
 int main()
 {
 	printf("Starting the program!!\n");
+
     if (!bcm2835_init()){
 		printf("Exiting\n");
 		return 1;
 	}
+
+    // setup external interrupt
+	if(wiringPiSetup() < 0) return 1;
+	if(wiringPiISR(IRQ_PIN, INT_EDGE_FALLING, &ISR) < 0)
+    {
+        printf("Unable to setup ISR \n");
+    }
 
 	// configure SPI
     bcm2835_spi_begin();
@@ -116,7 +123,7 @@ int main()
             firstTime = 0;
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            RequestFrom(atmega16DHT11);
+            RequestFrom(atmega16ToggleRelay);
             _delay_ms(2000);
             //RequestFrom(atmega328Address);
             //_delay_ms(2000);
@@ -127,7 +134,7 @@ int main()
         {
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            RequestFrom(atmega16DHT11);
+            RequestFrom(atmega16ToggleRelay);
             _delay_ms(2000);
             //RequestFrom(atmega328Address);
             //_delay_ms(2000);
@@ -141,13 +148,6 @@ int main()
 
     bcm2835_close();
     return 0;
-}
-
-void SendAck(uint8_t *ack)
-{
-    changeNrfToTX();
-    transmit_data(ack);
-    changeNrfToRX();
 }
 
 void RequestFrom(uint8_t *addr)
@@ -167,7 +167,10 @@ void RequestFrom(uint8_t *addr)
         // depends on command addr what command option to pass
         if(addr[3] == 0x44) receive_data(REGULAR);
         else if(addr[3] == DHT11_REQUEST) receive_data(DHT11);
-        else if(addr[3] == RELAY1_TOGGLE) receive_data(RELAY1);
+        else if(addr[3] == RELAY1_TOGGLE)
+        {
+            sendingRelayCommand = 1;
+        }
         delay(1000);
         changeNrfToTX();
         retries++;
@@ -300,13 +303,13 @@ void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode)
 	if(mode == 'T') // set module as TX
 	{
 		// CONFIG register setup (transmitter, pwr up)
-		values[0] = 0x1E;//0b0000 1110
+		values[0] = 0x5E;//0b0101 1110
 		ReadWriteNRF(W, CONFIG, values, 1);
 	}
 	else // set module as RX
 	{
 		// CONFIG register setup (receiver, pwr up)
-		values[0] = 0x1F;//0b0000 1111
+		values[0] = 0x5F;//0b0101 1110
 		ReadWriteNRF(W, CONFIG, values, 1);
 	}
 
@@ -324,16 +327,6 @@ void transmit_data(uint8_t *data)
 	_delay_us(1000); // wait atleast 10uS
 	clear_bit(CE); // disable TX
 	_delay_us(10);
-
-	// if MAX_RT flag raised that means transmission failed
-	/*if(ReadRegister(STATUS) & (1 << MAX_RT))
-	{
-        printf("Transmission failed!\n");
-	}
-	else
-	{
-        printf("Transmission successful\n");
-	}*/
 
 	resetNrf();
 }
@@ -395,21 +388,6 @@ void receive_data(int command)
                 // make sure this is 0
                 sendSuccessfully = 0;
             }
-            else if(command == RELAY1)
-            {
-                sendSuccessfully = 0;
-                if(receivedData[4] == RELAY_ACK)
-                {
-                    // now send ack that response received
-                    printf("RELAY ACK received: %02x\n", receivedData[4]);
-                    uint8_t receivedAck[5] = {0x41, 0x42, 0x43, RELAY_FINAL_ACK,0x16};
-                    SendAck(receivedAck);
-                    sendSuccessfully = 1;
-                    printf("Lights toggled!\n");
-                }
-            }
-
-
         }
         // if command is from atmega328p
         else if(receivedData[0] == 0x50)
@@ -447,6 +425,18 @@ void receive_data(int command)
 	resetNrf();
 }
 
+// this ISR will be launched when packet succesfully sent
+void ISR()
+{
+    printf("\nSent succesfully!!\n");
+    // if relay command is being sent
+    if(sendingRelayCommand)
+    {
+        printf("Lights toggled!\n");
+        sendSuccessfully = 1;
+    }
+}
+
 // after every received/transmitted payload IRQ must be reseted
 void resetNrf(void)
 {
@@ -464,7 +454,7 @@ void changeNrfToRX()
 {
 	uint8_t values[1];
 	// CONFIG register setup (receiver, pwr up)
-	values[0] = 0x1F;//0b0000 1111
+	values[0] = 0x5F;//0b0101 1110
 	ReadWriteNRF(W, CONFIG, values, 1);
 	_delay_ms(100);
 }
@@ -473,7 +463,7 @@ void changeNrfToTX()
 {
 	uint8_t values[1];
 	// CONFIG register setup (transmitter, pwr up)
-	values[0] = 0x1E;//0b0000 1110
+	values[0] = 0x5E;//0b0101 1110
 	ReadWriteNRF(W, CONFIG, values, 1);
 	_delay_ms(100);
 }
