@@ -31,3 +31,9 @@ EDIT3:
 Added RPi code. Solved RPi problem (not receiving packet from atmega sometimes) by placing code that send request and wait for response ir while 
 loop that sends request (maximum 10 times) until it receives answer.
 Also between commands, rpi listens for emergency messages (like button press on atmega) 
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+EDIT4:
+Added PIR motion sensor and relay on atmega2. RPi can now send data to toggle relay. Finally managed to get external interrupts working and can now monitor
+whether packet was successfully sent to atmega or not. Using ISR (interrupt service routine) I no longer have to use complex algorithm to make sure relay was toggled.
+If command successfully was sent to atmega, I know that it'll be toggled. Later will add functionality to send back relay status to be 100% sure.
