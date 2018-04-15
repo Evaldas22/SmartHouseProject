@@ -27,12 +27,17 @@
 #define R 0
 #define DHT11_PIN 6
 #define BUTTON_PIN 4
+#define RELAY1 PA1
+#define PIR_SENSOR PA3
 
 #define MAX_RETRIES 10
 
 #define BUTTON1 0xF1
 #define EMERGENCY_ANSWER 0x66
 #define DHT11_REQUEST 0x70
+#define RELAY1_COMMAND 0x51
+#define RELAY_ACK 0x61
+#define RELAY_FINAL_ACK 0x62
 // ---------------------------------------------------------------
 
 // --------------------------Functions----------------------------
@@ -50,6 +55,10 @@ void Request();
 void Response();
 uint8_t Receive_data_DHT11();
 void CheckButtonState();
+void initRelays();
+void ToggleLights();
+void initPIRSensor();
+uint8_t CheckPIRSensor();
 // ---------------------------------------------------------------
 
 // global variable for storing any received data
@@ -89,10 +98,13 @@ int main(void)
 	
 	Uart_Send_String("Working\n");
 	
+	initRelays();
+	initPIRSensor();
+	
     while (1) 
     {
 		receive_data();
-		CheckButtonState();
+		//CheckButtonState();
     }
 }
 
@@ -194,7 +206,7 @@ void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode)
 	values[0] = 0x01 + pipe;
 	ReadWriteNRF(W, EN_AA, values, 1);
 	
-	values[0] = 0x1F; // 500uS delay and 15 retries to send data if failed
+	values[0] = 0x2F; // 500uS delay and 15 retries to send data if failed
 	ReadWriteNRF(W, SETUP_RETR, values, 1);
 	
 	//enable pipe
@@ -328,7 +340,7 @@ void changeNrfToTX()
 ISR(INT0_vect)
 {
 	// default answer
-	uint8_t dataToSend[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
+	uint8_t defaultAnswer[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
 		
 	cli(); // disable interrupt 
 	clear_bit(PORTB, CE); // disable chip to stop listening
@@ -345,8 +357,20 @@ ISR(INT0_vect)
 		if(data[3] == DHT11_REQUEST) SendDHT11Data();
 		// if RPi successfully received emergency message
 		else if(data[3] == EMERGENCY_ANSWER) successfullySend = 1;
-		// if command was not recognised send default
-		else SendAnswer(dataToSend);
+		// if RPI is requesting to toggle relay1
+		else if(data[3] == RELAY1_COMMAND) 
+		{
+			Uart_Send_String("RELAY1_COMMAND\n");
+			uint8_t answer[5] = {0x41, 0x42, 0x43, 0x44, RELAY_ACK}; // ABCDE
+			SendAnswer(answer); // send that command received
+		}
+		else if(data[3] == RELAY_FINAL_ACK)
+		{
+			Uart_Send_String("RELAY_FINAL_ACK\n");
+			ToggleLights();
+		}
+		// if command was not recognised it might be default so send default
+		else SendAnswer(defaultAnswer);
 	}
 	
 	sei(); // re-enable interrupts again
@@ -414,5 +438,30 @@ uint8_t Receive_data_DHT11()
 		while(check_bit(PIND, DHT11_PIN)); // wait for HIGH signal to end
 	}
 	return temp;
+}
+
+void initRelays()
+{
+	set_bit(DDRA, RELAY1);	// output
+	clear_bit(PORTA, RELAY1); // LOW
+}
+
+// this should send short signal to relay which will activate impulse relay
+void ToggleLights()
+{
+	set_bit(PORTA, RELAY1);
+	_delay_ms(50);
+	clear_bit(PORTA, RELAY1);
+}
+
+void initPIRSensor()
+{
+	clear_bit(DDRA, PIR_SENSOR); // input 
+}
+
+uint8_t CheckPIRSensor()
+{
+	if(check_bit(PINA, PIR_SENSOR)) return 1;
+	else return 0;
 }
 
