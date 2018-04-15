@@ -11,3 +11,13 @@
 
 1521190965 /home/pi/Desktop/nrf24Master/nRF24L01.h
 
+1523803416 source:/home/pi/Desktop/SmartHouseProject/nrf24Master/main.c
+	"nRF24L01.h"
+	<wiringPi.h>
+	<bcm2835.h>
+	<stdio.h>
+	<stdint.h>
+	<time.h>
+
+1521190965 /home/pi/Desktop/SmartHouseProject/nrf24Master/nRF24L01.h
+

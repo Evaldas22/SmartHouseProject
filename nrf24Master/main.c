@@ -24,13 +24,18 @@
 // command defines
 #define REGULAR 0
 #define DHT11 1
-#define BUTTON1 2
+#define EMERGENCY_COM 2
+#define RELAY1 3
+#define ACK 4
 
 #define BUTTON1 0xF1
 #define EMERGENCY_ANSWER 0x66
 #define DHT11_REQUEST 0x70
+#define RELAY1_TOGGLE 0x51
+#define RELAY_ACK 0x61
+#define RELAY_FINAL_ACK 0x62
 
-#define TIME_INTERVAL_SEC 30 // 1 minute
+#define TIME_INTERVAL_SEC 5 // 1 minute
 #define MAX_RETRIES 10
 
 // Some pins
@@ -48,6 +53,7 @@ void receive_data(int command);
 void resetNrf(void);
 void changeNrfToRX();
 void changeNrfToTX();
+void SendAck(uint8_t *ack);
 // ---------------------------------------------------------
 
 volatile uint8_t sendSuccessfully = 0;
@@ -83,12 +89,14 @@ int main()
 	// commands for atmega16
 	uint8_t atmega16Address[5] = {0x41, 0x42, 0x43, 0x44, 0x16};
 	uint8_t atmega16DHT11[5] = {0x41, 0x42, 0x43, DHT11_REQUEST, 0x16};
+	uint8_t atmega16ToggleRelay[5] = {0x41, 0x42, 0x43, RELAY1_TOGGLE, 0x16};
 
     // command for atmega328p
 	uint8_t atmega328Address[5] = {0x11, 0x11, 0x11, 0x11, 0x32};
 
     // Initialize nrf as transmitter
 	Nrf24_init(0, rxAddrFirstTX, txAddrFirstTX, 'T');
+	printf("CONFIG register: %02x\n", ReadRegister(CONFIG));
 
 	// flush any IRQs from nrf before begining
 	resetNrf();
@@ -107,7 +115,7 @@ int main()
         {
             firstTime = 0;
             startTime = myTime;
-            printf("Time when sent: %s\n", ctime(&myTime));
+            printf("\nTime when sent: %s\n", ctime(&myTime));
             RequestFrom(atmega16DHT11);
             _delay_ms(2000);
             //RequestFrom(atmega328Address);
@@ -118,7 +126,7 @@ int main()
         if ((int)difftime(myTime, startTime) >= TIME_INTERVAL_SEC)
         {
             startTime = myTime;
-            printf("Time when sent: %s\n", ctime(&myTime));
+            printf("\nTime when sent: %s\n", ctime(&myTime));
             RequestFrom(atmega16DHT11);
             _delay_ms(2000);
             //RequestFrom(atmega328Address);
@@ -127,12 +135,19 @@ int main()
 
         // while not sending any commands listen for any emergency messages
         changeNrfToRX();
-        receive_data(BUTTON1);
+        receive_data(EMERGENCY_COM);
         changeNrfToTX();
     }
 
     bcm2835_close();
     return 0;
+}
+
+void SendAck(uint8_t *ack)
+{
+    changeNrfToTX();
+    transmit_data(ack);
+    changeNrfToRX();
 }
 
 void RequestFrom(uint8_t *addr)
@@ -152,6 +167,7 @@ void RequestFrom(uint8_t *addr)
         // depends on command addr what command option to pass
         if(addr[3] == 0x44) receive_data(REGULAR);
         else if(addr[3] == DHT11_REQUEST) receive_data(DHT11);
+        else if(addr[3] == RELAY1_TOGGLE) receive_data(RELAY1);
         delay(1000);
         changeNrfToTX();
         retries++;
@@ -225,7 +241,7 @@ void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode)
 	values[0] = 0x01 + pipe;
 	ReadWriteNRF(W, EN_AA, values, 1);
 
-	values[0] = 0x1F; // 750uS delay and 15 retries to send data if failed
+	values[0] = 0x2F; // 750uS delay and 15 retries to send data if failed
 	ReadWriteNRF(W, SETUP_RETR, values, 1);
 
 	//enable pipe
@@ -284,13 +300,13 @@ void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode)
 	if(mode == 'T') // set module as TX
 	{
 		// CONFIG register setup (transmitter, pwr up)
-		values[0] = 0x0E;//0b0000 1110
+		values[0] = 0x1E;//0b0000 1110
 		ReadWriteNRF(W, CONFIG, values, 1);
 	}
 	else // set module as RX
 	{
 		// CONFIG register setup (receiver, pwr up)
-		values[0] = 0x0F;//0b0000 1111
+		values[0] = 0x1F;//0b0000 1111
 		ReadWriteNRF(W, CONFIG, values, 1);
 	}
 
@@ -305,19 +321,19 @@ void transmit_data(uint8_t *data)
 
 	_delay_ms(10);
 	set_bit(CE); // enable nrf for TX
-	_delay_us(250); // wait atleast 10uS
+	_delay_us(1000); // wait atleast 10uS
 	clear_bit(CE); // disable TX
 	_delay_us(10);
 
 	// if MAX_RT flag raised that means transmission failed
-	if(ReadRegister(STATUS) & (1 << MAX_RT))
+	/*if(ReadRegister(STATUS) & (1 << MAX_RT))
 	{
         printf("Transmission failed!\n");
 	}
 	else
 	{
         printf("Transmission successful\n");
-	}
+	}*/
 
 	resetNrf();
 }
@@ -356,29 +372,43 @@ void receive_data(int command)
             {
                 printf("Data: %s\n\n\n", receivedData);
             }
-            // dht11 sensor respnse arrived
+            // dht11 sensor response arrived
             else if(command == DHT11)
             {
                 printf("Temperature: %d\n", receivedData[3]);
                 printf("Humdity: %d\n\n\n", receivedData[4]);
             }
             // emergency button message arrived
-            else if(command == BUTTON1)
+            else if(command == EMERGENCY_COM)
             {
                 // if button 1 was pressed
-                if(receivedData[4] == 0xF1)
+                if(receivedData[4] == BUTTON1)
                 {
                     printf("Button 1 was pressed.Update Database\n");
                     // send response that emergency message was received1
 
                     changeNrfToTX();
-                    uint8_t gotMessage[5] = {0x41, 0x42, 0x43, 0x66, 0x16};
+                    uint8_t gotMessage[5] = {0x41, 0x42, 0x43, EMERGENCY_ANSWER, 0x16};
                     transmit_data(gotMessage);
                     changeNrfToRX();
                 }
                 // make sure this is 0
                 sendSuccessfully = 0;
             }
+            else if(command == RELAY1)
+            {
+                sendSuccessfully = 0;
+                if(receivedData[4] == RELAY_ACK)
+                {
+                    // now send ack that response received
+                    printf("RELAY ACK received: %02x\n", receivedData[4]);
+                    uint8_t receivedAck[5] = {0x41, 0x42, 0x43, RELAY_FINAL_ACK,0x16};
+                    SendAck(receivedAck);
+                    sendSuccessfully = 1;
+                    printf("Lights toggled!\n");
+                }
+            }
+
 
         }
         // if command is from atmega328p
@@ -391,8 +421,17 @@ void receive_data(int command)
 	// else means there is no data waiting
 	else
 	{
+        sendSuccessfully = 0;
+        //printf("No data.\n");
+        /*
+        if (command == RELAY1)
+        {
+            sendSuccessfully = 1; // pretend that data was sent. Not very good solution
+            printf("Lights switched!\n");
+        }
         // only send debug info when it's RPi request, not emergency message
-        if(command != BUTTON1)
+
+        else if(command != BUTTON1)
         {
             receivedData = ReadWriteNRF(R, R_RX_PAYLOAD, receivedData, 5);
             printf("No data for you!!\n");
@@ -402,6 +441,7 @@ void receive_data(int command)
             printf("DATA: %s\n", receivedData);
             printf("------DEBUG INFO END------\n");
         }
+        */
 	}
 
 	resetNrf();
@@ -424,7 +464,7 @@ void changeNrfToRX()
 {
 	uint8_t values[1];
 	// CONFIG register setup (receiver, pwr up)
-	values[0] = 0x0F;//0b0000 1111
+	values[0] = 0x1F;//0b0000 1111
 	ReadWriteNRF(W, CONFIG, values, 1);
 	_delay_ms(100);
 }
@@ -433,7 +473,7 @@ void changeNrfToTX()
 {
 	uint8_t values[1];
 	// CONFIG register setup (transmitter, pwr up)
-	values[0] = 0x0E;//0b0000 1110
+	values[0] = 0x1E;//0b0000 1110
 	ReadWriteNRF(W, CONFIG, values, 1);
 	_delay_ms(100);
 }
