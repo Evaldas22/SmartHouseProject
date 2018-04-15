@@ -36,8 +36,6 @@
 #define EMERGENCY_ANSWER 0x66
 #define DHT11_REQUEST 0x70
 #define RELAY1_COMMAND 0x51
-#define RELAY_ACK 0x61
-#define RELAY_FINAL_ACK 0x62
 // ---------------------------------------------------------------
 
 // --------------------------Functions----------------------------
@@ -361,18 +359,11 @@ ISR(INT0_vect)
 		else if(data[3] == RELAY1_COMMAND) 
 		{
 			Uart_Send_String("RELAY1_COMMAND\n");
-			uint8_t answer[5] = {0x41, 0x42, 0x43, 0x44, RELAY_ACK}; // ABCDE
-			SendAnswer(answer); // send that command received
-		}
-		else if(data[3] == RELAY_FINAL_ACK)
-		{
-			Uart_Send_String("RELAY_FINAL_ACK\n");
 			ToggleLights();
 		}
 		// if command was not recognised it might be default so send default
 		else SendAnswer(defaultAnswer);
 	}
-	
 	sei(); // re-enable interrupts again
 }
 
