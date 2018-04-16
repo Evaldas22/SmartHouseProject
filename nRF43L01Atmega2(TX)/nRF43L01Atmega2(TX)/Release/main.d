@@ -18,7 +18,7 @@ main.d main.o: .././main.c .././Basic_operations.h \
  c:\program\ files\ (x86)\atmel\studio\7.0\toolchain\avr8\avr8-gnu-toolchain\lib\gcc\avr\5.4.0\include\stddef.h \
  c:\program\ files\ (x86)\atmel\studio\7.0\toolchain\avr8\avr8-gnu-toolchain\avr\include\avr\interrupt.h \
  .././SPI.h .././nRF24L01.h .././UART.h .././ExternalInterrupts.h \
- .././ButtonPressed.h
+ .././ButtonPressed.h .././nrf24.h
 
 .././Basic_operations.h:
 
@@ -67,3 +67,5 @@ c:\program\ files\ (x86)\atmel\studio\7.0\toolchain\avr8\avr8-gnu-toolchain\avr\
 .././ExternalInterrupts.h:
 
 .././ButtonPressed.h:
+
+.././nrf24.h:

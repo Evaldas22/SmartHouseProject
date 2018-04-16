@@ -130,6 +130,9 @@
     <Compile Include="main.c">
       <SubType>compile</SubType>
     </Compile>
+    <Compile Include="nrf24.h">
+      <SubType>compile</SubType>
+    </Compile>
     <Compile Include="nRF24L01.h">
       <SubType>compile</SubType>
     </Compile>
