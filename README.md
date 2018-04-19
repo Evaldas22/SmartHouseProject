@@ -37,3 +37,9 @@ EDIT4:
 Added PIR motion sensor and relay on atmega2. RPi can now send data to toggle relay. Finally managed to get external interrupts working and can now monitor
 whether packet was successfully sent to atmega or not. Using ISR (interrupt service routine) I no longer have to use complex algorithm to make sure relay was toggled.
 If command successfully was sent to atmega, I know that it'll be toggled. Later will add functionality to send back relay status to be 100% sure.
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+EDIT5:
+Added functionality to control relay 1 with light switch and also when received command from RPi. Now when light switch changes position atmega2
+recognises it, toggle relay and also send status to RPi. RPi has commands to toggle relay 1 and also check its state. When using light switch a medium delay
+of about 2 seconds can be seen, because atmega listens for 2 seconds for commands and only then checks the state of ligth switch.
