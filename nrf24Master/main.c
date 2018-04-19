@@ -23,16 +23,18 @@
 // command defines
 #define REGULAR 0
 #define DHT11 1
-#define EMERGENCY_COM 2
+#define STATE_UPDATE 2
 #define RELAY1 3
 #define ACK 4
+#define FIND_STATE 5
 
-#define BUTTON1 0xF1
-#define EMERGENCY_ANSWER 0x66
+#define RELAY1_STATE 0xF1
+#define STATE_UPDATE_ANSWER 0x66
 #define DHT11_REQUEST 0x70
 #define RELAY1_TOGGLE 0x51
+#define RELAY1_FIND_STATE 0x52
 
-#define TIME_INTERVAL_SEC 10 // 1 minute
+#define TIME_INTERVAL_SEC 10
 #define MAX_RETRIES 10
 
 // Some pins
@@ -56,6 +58,8 @@ void changeNrfToTX();
 
 volatile uint8_t sendSuccessfully = 0;
 volatile uint8_t sendingRelayCommand = 0;
+
+uint8_t relay1State;
 
 int main()
 {
@@ -97,13 +101,13 @@ int main()
 	uint8_t atmega16Address[5] = {0x41, 0x42, 0x43, 0x44, 0x16};
 	uint8_t atmega16DHT11[5] = {0x41, 0x42, 0x43, DHT11_REQUEST, 0x16};
 	uint8_t atmega16ToggleRelay[5] = {0x41, 0x42, 0x43, RELAY1_TOGGLE, 0x16};
+	uint8_t atmega16FindRelayStatus[5] = {0x41, 0x42, 0x43, RELAY1_FIND_STATE, 0x16};
 
     // command for atmega328p
 	uint8_t atmega328Address[5] = {0x11, 0x11, 0x11, 0x11, 0x32};
 
     // Initialize nrf as transmitter
 	Nrf24_init(0, rxAddrFirstTX, txAddrFirstTX, 'T');
-	printf("CONFIG register: %02x\n", ReadRegister(CONFIG));
 
 	// flush any IRQs from nrf before begining
 	resetNrf();
@@ -118,31 +122,35 @@ int main()
     {
         time(&myTime); // get current time
         // set first time startTime
+
         if (firstTime)
         {
             firstTime = 0;
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            RequestFrom(atmega16ToggleRelay);
-            _delay_ms(2000);
+            RequestFrom(atmega16FindRelayStatus);
+            //_delay_ms(2000);
             //RequestFrom(atmega328Address);
             //_delay_ms(2000);
         }
 
         // when set time interval is past do this
+
         if ((int)difftime(myTime, startTime) >= TIME_INTERVAL_SEC)
         {
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            RequestFrom(atmega16ToggleRelay);
-            _delay_ms(2000);
+            RequestFrom(atmega16DHT11);
+            //_delay_ms(2000);
             //RequestFrom(atmega328Address);
             //_delay_ms(2000);
         }
 
+
+
         // while not sending any commands listen for any emergency messages
         changeNrfToRX();
-        receive_data(EMERGENCY_COM);
+        receive_data(STATE_UPDATE);
         changeNrfToTX();
     }
 
@@ -171,6 +179,8 @@ void RequestFrom(uint8_t *addr)
         {
             sendingRelayCommand = 1;
         }
+        else if(addr[3] == RELAY1_FIND_STATE) receive_data(FIND_STATE);
+
         delay(1000);
         changeNrfToTX();
         retries++;
@@ -372,21 +382,45 @@ void receive_data(int command)
                 printf("Humdity: %d\n\n\n", receivedData[4]);
             }
             // emergency button message arrived
-            else if(command == EMERGENCY_COM)
+            else if(command == STATE_UPDATE)
             {
-                // if button 1 was pressed
-                if(receivedData[4] == BUTTON1)
+                // if relay1 was toggled
+                if(receivedData[4] == RELAY1_STATE)
                 {
-                    printf("Button 1 was pressed.Update Database\n");
-                    // send response that emergency message was received1
+                    printf("Relay 1 was toggled.\n");
+
+                    if(receivedData[3])
+                    {
+                        printf("Now relay 1 is ON.\n");
+                        relay1State = 1;
+                    }
+                    else
+                    {
+                        printf("Now relay 1 is OFF.\n");
+                        relay1State = 1;
+                    }
+                    // send response that state update message was received
 
                     changeNrfToTX();
-                    uint8_t gotMessage[5] = {0x41, 0x42, 0x43, EMERGENCY_ANSWER, 0x16};
+                    uint8_t gotMessage[5] = {0x41, 0x42, 0x43, STATE_UPDATE_ANSWER, 0x16};
                     transmit_data(gotMessage);
                     changeNrfToRX();
                 }
                 // make sure this is 0
                 sendSuccessfully = 0;
+            }
+            else if(command == FIND_STATE)
+            {
+                if(receivedData[4])
+                {
+                    printf("Now relay 1 is ON.\n");
+                    relay1State = 1;
+                }
+                else
+                {
+                    printf("Now relay 1 is OFF.\n");
+                    relay1State = 0;
+                }
             }
         }
         // if command is from atmega328p
@@ -428,12 +462,13 @@ void receive_data(int command)
 // this ISR will be launched when packet succesfully sent
 void ISR()
 {
-    printf("\nSent succesfully!!\n");
     // if relay command is being sent
     if(sendingRelayCommand)
     {
         printf("Lights toggled!\n");
         sendSuccessfully = 1;
+        // invert relay1State
+        relay1State = (relay1State == 1) ? 0 : 1;
     }
 }
 
