@@ -121,9 +121,6 @@
     <Compile Include="Basic_operations.h">
       <SubType>compile</SubType>
     </Compile>
-    <Compile Include="ButtonPressed.h">
-      <SubType>compile</SubType>
-    </Compile>
     <Compile Include="ExternalInterrupts.h">
       <SubType>compile</SubType>
     </Compile>
