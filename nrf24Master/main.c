@@ -31,10 +31,11 @@
 #define RELAY1_STATE 0xF1
 #define STATE_UPDATE_ANSWER 0x66
 #define DHT11_REQUEST 0x70
-#define RELAY1_TOGGLE 0x51
-#define RELAY1_FIND_STATE 0x52
+#define RELAY_TOGGLE 0x51
+#define FIND_STATE 0x52
+#define PIR_STATE 0x30
 
-#define TIME_INTERVAL_SEC 10
+#define TIME_INTERVAL_SEC 60
 #define MAX_RETRIES 10
 
 // Some pins
@@ -100,8 +101,8 @@ int main()
 	// commands for atmega16
 	uint8_t atmega16Address[5] = {0x41, 0x42, 0x43, 0x44, 0x16};
 	uint8_t atmega16DHT11[5] = {0x41, 0x42, 0x43, DHT11_REQUEST, 0x16};
-	uint8_t atmega16ToggleRelay[5] = {0x41, 0x42, 0x43, RELAY1_TOGGLE, 0x16};
-	uint8_t atmega16FindRelayStatus[5] = {0x41, 0x42, 0x43, RELAY1_FIND_STATE, 0x16};
+	uint8_t atmega16ToggleRelay[5] = {0x41, 0x42, RELAY1_STATE, RELAY_TOGGLE, 0x16};
+	uint8_t atmega16FindRelayStatus[5] = {0x41, 0x42, RELAY1_STATE, FIND_STATE, 0x16};
 
     // command for atmega328p
 	uint8_t atmega328Address[5] = {0x11, 0x11, 0x11, 0x11, 0x32};
@@ -118,6 +119,8 @@ int main()
 	time_t startTime;
 	int firstTime = 1;
 
+	RequestFrom(atmega16FindRelayStatus);
+
     while (1)
     {
         time(&myTime); // get current time
@@ -129,9 +132,7 @@ int main()
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
             RequestFrom(atmega16FindRelayStatus);
-            //_delay_ms(2000);
-            //RequestFrom(atmega328Address);
-            //_delay_ms(2000);
+            RequestFrom(atmega16DHT11);
         }
 
         // when set time interval is past do this
@@ -141,12 +142,7 @@ int main()
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
             RequestFrom(atmega16DHT11);
-            //_delay_ms(2000);
-            //RequestFrom(atmega328Address);
-            //_delay_ms(2000);
         }
-
-
 
         // while not sending any commands listen for any emergency messages
         changeNrfToRX();
@@ -166,6 +162,11 @@ void RequestFrom(uint8_t *addr)
     // while no response is received keep sending, but no more than MAX_RETRIES
     while((sendSuccessfully != 1) && (retries < MAX_RETRIES))
     {
+        if(addr[3] == RELAY_TOGGLE)
+        {
+            sendingRelayCommand = 1; // must set this before sending
+        }
+
         printf("Trying to send!!\n");
         transmit_data(addr);
         //_delay_ms(5);
@@ -175,11 +176,7 @@ void RequestFrom(uint8_t *addr)
         // depends on command addr what command option to pass
         if(addr[3] == 0x44) receive_data(REGULAR);
         else if(addr[3] == DHT11_REQUEST) receive_data(DHT11);
-        else if(addr[3] == RELAY1_TOGGLE)
-        {
-            sendingRelayCommand = 1;
-        }
-        else if(addr[3] == RELAY1_FIND_STATE) receive_data(FIND_STATE);
+        else if(addr[3] == FIND_STATE) receive_data(FIND_STATE);
 
         delay(1000);
         changeNrfToTX();
@@ -406,6 +403,14 @@ void receive_data(int command)
                     transmit_data(gotMessage);
                     changeNrfToRX();
                 }
+                else if(receivedData[4] == PIR_STATE)
+                {
+                    printf("PIR motion sensor was triggered.\n");
+                    changeNrfToTX();
+                    uint8_t gotMessage[5] = {0x41, 0x42, 0x43, STATE_UPDATE_ANSWER, 0x16};
+                    transmit_data(gotMessage);
+                    changeNrfToRX();
+                }
                 // make sure this is 0
                 sendSuccessfully = 0;
             }
@@ -413,12 +418,12 @@ void receive_data(int command)
             {
                 if(receivedData[4])
                 {
-                    printf("Now relay 1 is ON.\n");
+                    printf("Now relay is ON.\n");
                     relay1State = 1;
                 }
                 else
                 {
-                    printf("Now relay 1 is OFF.\n");
+                    printf("Now relay is OFF.\n");
                     relay1State = 0;
                 }
             }
