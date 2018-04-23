@@ -43,3 +43,9 @@ EDIT5:
 Added functionality to control relay 1 with light switch and also when received command from RPi. Now when light switch changes position atmega2
 recognises it, toggle relay and also send status to RPi. RPi has commands to toggle relay 1 and also check its state. When using light switch a medium delay
 of about 2 seconds can be seen, because atmega listens for 2 seconds for commands and only then checks the state of ligth switch.
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+EDIT6:
+Added functionality to send PIR motion sensor state to RPi whenever it is triggered i. e. something moves in fron of it. 
+Cleaned up code.
+PIR sensor hold its pin HIGH for about 4 seconds so RPi receives around 3 updates and also those updates keep atmega busy -> not very responsive light switching!! 
