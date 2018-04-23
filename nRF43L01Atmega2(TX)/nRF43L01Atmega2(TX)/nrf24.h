@@ -4,6 +4,8 @@
 #define W 1
 #define R 0
 
+#define LISTEN_TIME 1000 // in ms 
+
 #include <avr/io.h>
 #include <util/delay.h>
 #include <stdint.h>
@@ -179,7 +181,7 @@ void receive_data(void)
 	sei(); // enable interrupts if used
 	
 	set_bit(PORTB, CE); // enable for listening
-	_delay_ms(2000);
+	_delay_ms(LISTEN_TIME);
 	clear_bit(PORTB, CE); // stop listening
 	cli(); // disable all interrupts
 	resetNrf();

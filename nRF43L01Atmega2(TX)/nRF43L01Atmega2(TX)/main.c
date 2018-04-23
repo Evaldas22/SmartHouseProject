@@ -23,7 +23,10 @@
 // ---------------------------------------------------------------
 
 // ---------------------------defines-----------------------------
-#define DHT11_PIN 6
+#define DEVICE_ADDR 0x16
+#define DEVICE_ANSWER_START 0x41
+
+#define DHT11_PIN PD6
 #define RELAY1 PA1
 #define PIR_SENSOR PA3
 #define LIGHT_SWITCH PA0
@@ -33,11 +36,13 @@
 #define RELAY1_STATE 0xF1
 #define STATE_UPDATE_ANSWER 0x66
 #define DHT11_REQUEST 0x70
-#define RELAY1_COMMAND 0x51
-#define RELAY1_FIND_STATE 0x52
+#define RELAY_TOGGLE 0x51
+#define FIND_STATE 0x52
+#define PIR_STATE 0x30
 // ---------------------------------------------------------------
 
 // --------------------------Functions----------------------------
+void CheckPirSensor();
 void CheckLightSwitches();
 void SendAnswerUntilReceived(uint8_t answerByte, uint8_t state);
 void SendAnswer();
@@ -47,7 +52,7 @@ void Response();
 uint8_t Receive_data_DHT11();
 void CheckRelays();
 void initRelays();
-void ToggleLights();
+void ToggleLights(uint8_t relay);
 void initPIRSensor();
 void initLightSwitch();
 uint8_t CheckInput(unsigned char PIN, unsigned char pinToCheck);
@@ -97,7 +102,19 @@ int main(void)
 		receive_data();
 		CheckLightSwitches();
 		CheckRelays();
+		//CheckPirSensor();
     }
+}
+
+void CheckPirSensor()
+{
+	uint8_t PIRState = CheckInput(PINA, PIR_SENSOR);
+		
+	// if motion sensor pin is HIGH -> motion detected -> send that to server
+	if(PIRState)
+	{
+		SendAnswerUntilReceived(PIR_STATE, PIRState);
+	}
 }
 
 void CheckLightSwitches()
@@ -108,7 +125,7 @@ void CheckLightSwitches()
 	if(currentSwitchState != lastSwitchState)
 	{
 		// toggle lights
-		ToggleLights();
+		ToggleLights(RELAY1);
 		// update switch state
 		lastSwitchState = currentSwitchState;
 	}
@@ -130,7 +147,6 @@ void CheckRelays()
 		lastRelay1State = currentState;
 		//if(lightState) Uart_Send_String("Lights are ON\n");
 		//else Uart_Send_String("Lights are OFF\n");
-		
 	}
 }
 
@@ -166,39 +182,44 @@ ISR(INT0_vect)
 {
 	uint8_t *data;
 	
-	// default answer
-	uint8_t defaultAnswer[5] = {0x41, 0x42, 0x43, 0x44, 0x45}; // ABCDE
+	// make default answer
+	uint8_t defaultAnswer[5] = {DEVICE_ANSWER_START, 0x42, 0x43, 0x44, 0x45}; // ABCDE
 		
-	cli(); // disable interrupt 
+	cli(); // disable interrupts
 	clear_bit(PORTB, CE); // disable chip to stop listening
 	
-	// read data into global array
+	// read data 
 	data = ReadWriteNRF(R, R_RX_PAYLOAD, data, 5);
 		
 	// if message is meant for this atmega
-	if (data[4] == 0x16)
+	if (data[4] == DEVICE_ADDR)
 	{
 		Uart_Send_String("Received\n");
 		
 		// if RPi is requesting for temperature and humidity
 		if(data[3] == DHT11_REQUEST) SendDHT11Data();
-		// if RPi successfully received emergency message
+		// if RPi successfully received state update message
 		else if(data[3] == STATE_UPDATE_ANSWER) successfullySend = 1;
 		// if RPI is requesting to toggle relay1
-		else if(data[3] == RELAY1_COMMAND) 
+		else if(data[3] == RELAY_TOGGLE) 
 		{
-			//Uart_Send_String("RELAY1_COMMAND\n");
-			ToggleLights();
-			// update status so check function won't be triggered
-			lastRelay1State = CheckInput(PINA, RELAY1);
+			if(data[2] == RELAY1_STATE)
+			{
+				ToggleLights(RELAY1);
+				// update status so check function won't be triggered
+				lastRelay1State = CheckInput(PINA, RELAY1);
+			}
 		}
-		else if(data[3] == RELAY1_FIND_STATE)
+		// if RPi want to know relay 1 state
+		else if(data[3] == FIND_STATE)
 		{
-			//Uart_Send_String("RELAY1 state find command\n");
-			uint8_t stateRelay1 = CheckInput(PINA, RELAY1);
-			uint8_t stateAnswer[5] = {0x41, 0x42, 0x43, 0x44, stateRelay1};
-				
-			SendAnswer(stateAnswer);
+			if(data[2] == RELAY1_STATE)
+			{
+				uint8_t stateRelay1 = CheckInput(PINA, RELAY1);
+				uint8_t stateAnswer[5] = {0x41, 0x42, 0x43, 0x44, stateRelay1};
+				SendAnswer(stateAnswer);
+			}
+			
 		}
 		// if command was not recognised it might be default so send default
 		else SendAnswer(defaultAnswer);
@@ -217,20 +238,7 @@ void SendDHT11Data()
 	CheckSum = Receive_data_DHT11();	// store next eight bit in CheckSum 
 	
 	// check sum
-	if ((humidity + D_RH + temperature + D_Temp) != CheckSum)
-	{
-		Uart_Send_String("Error with check sum\n");
-	}
-	
-	/*
-	// display via uart
-	char temp[2], dregme[2];
-	sprintf(temp, "%d", temperature);
-	Uart_Send_String("Temperature: "); Uart_Send_String(temp); Uart_Send_String("\n");
-	
-	sprintf(dregme, "%d", humidity);
-	Uart_Send_String("Dregme: "); Uart_Send_String(dregme); Uart_Send_String("\n");
-	*/
+	if ((humidity + D_RH + temperature + D_Temp) != CheckSum){}
 	
 	// send actual data back
 	uint8_t answer[5] = {0x41, 0x42, 0x43, temperature, humidity};
@@ -250,6 +258,7 @@ void Request()
 void Response()
 {
 	clear_bit(DDRD, DHT11_PIN);			// now set as input		
+	// because of poor wires these whiles can freeze whole program
 	while(check_bit(PIND, DHT11_PIN));		// wait for first response(20-40uS)
 	while((check_bit(PIND, DHT11_PIN))==0);	// wait for LOW response(80uS)
 	while(check_bit(PIND, DHT11_PIN));		// wait for preparation HIGH(80uS)
@@ -279,11 +288,14 @@ void initRelays()
 }
 
 // this should send short signal to relay which will activate impulse relay
-void ToggleLights()
+void ToggleLights(uint8_t relay)
 {
-	// toggle relay
-	invert_bit(PORTA, RELAY1);
-	_delay_ms(50);
+	if(relay == RELAY1)
+	{
+		// toggle relay
+		invert_bit(PORTA, RELAY1);
+		_delay_ms(50);
+	}
 }
 
 void initPIRSensor()
