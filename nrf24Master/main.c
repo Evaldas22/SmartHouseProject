@@ -4,29 +4,63 @@
 */
 // ---------------------Includes-----------------------------
 #include "nRF24L01.h"
+#include "nRF24.h"
 #include <wiringPi.h>
 #include <bcm2835.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <time.h>
-// ---------------------------------------------------------
+#include <string.h>
+// -----------------------DB stuff----------------------------------
+typedef struct {
+   uint8_t      id; // relay id should the same as in db
+   char         name[50]; // relay + id
+   uint8_t      command; // commands start from 0xf1
+   uint8_t      state; // state depend on value from db
+} Relay;
 
+typedef struct {
+  Relay *array;
+  size_t used;
+  size_t size;
+} Array;
+
+void initArray(Array *a, size_t initialSize) {
+  a->array = (Relay *)malloc(initialSize * sizeof(Relay));
+  a->used = 0;
+  a->size = initialSize;
+}
+
+void insertArray(Array *a, Relay element) {
+  if (a->used == a->size) {
+    a->size *= 2;
+    a->array = (Relay *)realloc(a->array, a->size * sizeof(Relay));
+  }
+  a->array[a->used++] = element;
+}
+
+void freeArray(Array *a) {
+  free(a->array);
+  a->array = NULL;
+  a->used = a->size = 0;
+}
+
+volatile int diffFound = 0;
 // ---------------------Defines-----------------------------
 #define _delay_us(x) bcm2835_delayMicroseconds(x)
 #define _delay_ms(x) bcm2835_delay(x)
 #define set_bit(pin) bcm2835_gpio_write(pin, HIGH)
 #define clear_bit(pin) bcm2835_gpio_write(pin, LOW)
 
-// defines
-#define W 1
-#define R 0
 // command defines
 #define REGULAR 0
 #define DHT11 1
 #define STATE_UPDATE 2
 #define RELAY1 3
 #define ACK 4
-#define FIND_STATE 5
+#define FIND_STATE_COM 5
 
 #define RELAY1_STATE 0xF1
 #define STATE_UPDATE_ANSWER 0x66
@@ -38,6 +72,8 @@
 #define TIME_INTERVAL_SEC 60
 #define MAX_RETRIES 10
 
+#define ATMEGA16 0x20
+
 // Some pins
 #define CE RPI_GPIO_P1_22 // GPIO25
 #define SS RPI_GPIO_P1_18 // GPIO24. I'll use this to manually control NRF Slave select pin
@@ -46,21 +82,21 @@
 
 //-------------------------functions------------------------
 void RequestFrom(uint8_t *addr);
-uint8_t ReadRegister(uint8_t reg);
-uint8_t * ReadWriteNRF(uint8_t R_W, uint8_t reg, uint8_t *data, uint8_t size);
-void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode);
-void transmit_data(uint8_t *data);
 void receive_data(int command);
 void ISR();
-void resetNrf(void);
-void changeNrfToRX();
-void changeNrfToTX();
+static int callbackDummy(void *data, int columns, char **argv, char **colNames);
+static int compareTables(void *data, int columns, char **argv, char **colNames);
+static int InitializeAllData(void *data, int columns, char **argv, char **colNames);
+void CopyAllDataToTempDB(sqlite3* db, char *message, char *errMsg);
+void FindRelayStatus(uint8_t whichDevcice, uint8_t whichRelay);
 // ---------------------------------------------------------
 
 volatile uint8_t sendSuccessfully = 0;
 volatile uint8_t sendingRelayCommand = 0;
+Array arr;
 
-uint8_t relay1State;
+uint8_t relayState;
+uint8_t temperature, humidity;
 
 int main()
 {
@@ -119,7 +155,48 @@ int main()
 	time_t startTime;
 	int firstTime = 1;
 
-	RequestFrom(atmega16FindRelayStatus);
+	initArray(&arr, 1);
+	printf("Start. There are total %d relays\n", arr.used);
+
+	// db variables
+    const char* message = "Callback function called";
+    char *errMsg = 0;
+    char *sql;
+
+    // database object
+    sqlite3 *db;
+
+    // open database
+    int status = sqlite3_open("/home/pi/things.db", &db);
+
+    if(status)
+    {
+        fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
+        return(0);
+    }
+    else fprintf(stderr, "Opened database successfully\n");
+
+    sql = "SELECT * FROM things;";
+    status = sqlite3_exec(db, sql, InitializeAllData, (void *) message, &errMsg);
+
+    printf("After query. There are total %d relays\n", arr.used);
+
+    // make sure db has real statuses
+    for(int i = 0; i < arr.used; i++){
+        FindRelayStatus(ATMEGA16, arr.array[i].command);
+        if(relayState != arr.array[i].state){
+            // update state in db
+            printf("Updating state in DB\n");
+            char *value = (relayState) ? "ON" : "OFF";
+            char temp[200];
+            sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, arr.array[i].id);
+            sql = temp;
+            status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+        }
+    }
+
+    //after relays are synced make a copy of data
+    CopyAllDataToTempDB(db, message, errMsg);
 
     while (1)
     {
@@ -131,8 +208,17 @@ int main()
             firstTime = 0;
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            RequestFrom(atmega16FindRelayStatus);
             RequestFrom(atmega16DHT11);
+            printf("Updating DB\n");
+
+            char temp[200];
+            sprintf(temp, "UPDATE things SET value = '%d' where name = 'Temperature';", temperature);
+            sql = temp;
+            status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+
+            sprintf(temp, "UPDATE things SET value = '%d' where name = 'Humidity';", humidity);
+            sql = temp;
+            status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
         }
 
         // when set time interval is past do this
@@ -149,9 +235,20 @@ int main()
         receive_data(STATE_UPDATE);
         changeNrfToTX();
     }
-
     bcm2835_close();
+    sqlite3_close(db);
     return 0;
+}
+
+void FindRelayStatus(uint8_t whichDevcice, uint8_t whichRelay)
+{
+    if(whichDevcice == ATMEGA16)
+    {
+       uint8_t commandToSend[5] = {0x41, 0x42, whichRelay, FIND_STATE, 0x16};
+       printf("Senging command: %02x\n", whichRelay);
+       RequestFrom(commandToSend);
+    }
+
 }
 
 void RequestFrom(uint8_t *addr)
@@ -176,166 +273,12 @@ void RequestFrom(uint8_t *addr)
         // depends on command addr what command option to pass
         if(addr[3] == 0x44) receive_data(REGULAR);
         else if(addr[3] == DHT11_REQUEST) receive_data(DHT11);
-        else if(addr[3] == FIND_STATE) receive_data(FIND_STATE);
+        else if(addr[3] == FIND_STATE) receive_data(FIND_STATE_COM);
 
         delay(1000);
         changeNrfToTX();
         retries++;
     }
-}
-
-// reg is memory address
-uint8_t ReadRegister(uint8_t reg)
-{
-	_delay_us(10); // for safety precautions
-    clear_bit(SS);
-    _delay_us(10);
-
-	// R_REGISTER is redudant here because it's 0x00
-	bcm2835_spi_transfer(R_REGISTER | reg); // Read register command + register
-	_delay_us(10);
-
-	reg = bcm2835_spi_transfer(NOP); // send dummy byte to receive 1 byte
-	_delay_us(10);
-
-	set_bit(SS);
-	return reg;
-}
-
-uint8_t *ReadWriteNRF(uint8_t R_W, uint8_t reg, uint8_t *data, uint8_t size)
-{
-	// if write operation is required. W_TX_PAYLOAD cannot be used with write instruction
-	if (R_W == W && reg != W_TX_PAYLOAD && reg != FLUSH_TX && reg != FLUSH_RX)
-	{
-		reg = W_REGISTER + reg;
-	}
-
-	// Read instruction is 0x00 so there is no point in adding it to reg
-
-	static uint8_t returnedData[32]; // 32bytes are maximum
-
-	_delay_us(10);
-	clear_bit(SS); // enable slave
-	_delay_us(10);
-	bcm2835_spi_transfer(reg);
-	_delay_us(10);
-
-	for (int i = 0; i < size; i++)
-	{
-		// if receive data
-		if (R_W == R)
-		{
-			returnedData[i] = bcm2835_spi_transfer(NOP); // send dummy byte to shift
-			_delay_us(10);							     // data into array
-		}
-		// if send data
-		else
-		{
-			bcm2835_spi_transfer(data[i]);
-			_delay_us(10);
-		}
-	}
-
-	set_bit(SS); // disable slave
-	return returnedData;
-}
-
-void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode)
-{
-	// define 1 byte array
-	uint8_t values[5];
-
-	_delay_ms(100);
-
-	// enable auto acknowledgement for certaint pipe
-	values[0] = 0x01 + pipe;
-	ReadWriteNRF(W, EN_AA, values, 1);
-
-	values[0] = 0x2F; // 750uS delay and 15 retries to send data if failed
-	ReadWriteNRF(W, SETUP_RETR, values, 1);
-
-	//enable pipe
-	values[0] = 0x01 + pipe;
-	ReadWriteNRF(W, EN_RXADDR, values, 1);
-
-	// Setup address width. 0x03 for 5 bytes long
-	values[0] = 0x03;
-	ReadWriteNRF(W, SETUP_AW, values, 1);
-
-	// RF channel setup (2400 - 2525) 1MHz step. 125 channels
-	values[0] = 0x01; // 1st channel
-	ReadWriteNRF(W, RF_CH, values, 1);
-
-	// RF power mode and data speed setup
-	values[0] = 0x07; // 0b0000 0111 - 1Mbps(longer range), 0 dBm
-	ReadWriteNRF(W, RF_SETUP, values, 1);
-
-    // setup RX, TX addresses and Payload size (5bytes)
-	values[0] = 0x05;
-	switch (pipe)
-	{
-		case 0:
-		ReadWriteNRF(W, RX_ADDR_P0, addrRX, 5);
-		ReadWriteNRF(W, TX_ADDR, addrTX, 5);
-		ReadWriteNRF(W, RX_PW_P0, values, 1);
-		break;
-		case 1:
-		ReadWriteNRF(W, RX_ADDR_P1, addrRX, 5);
-		ReadWriteNRF(W, TX_ADDR, addrTX, 5);
-		ReadWriteNRF(W, RX_PW_P1, values, 1);
-		break;
-		case 2:
-		ReadWriteNRF(W, RX_ADDR_P2, addrRX, 5);
-		ReadWriteNRF(W, TX_ADDR, addrTX, 5);
-		ReadWriteNRF(W, RX_PW_P2, values, 1);
-		break;
-		case 3:
-		ReadWriteNRF(W, RX_ADDR_P3, addrRX, 5);
-		ReadWriteNRF(W, TX_ADDR, addrTX, 5);
-		ReadWriteNRF(W, RX_PW_P3, values, 1);
-		break;
-		case 4:
-		ReadWriteNRF(W, RX_ADDR_P4, addrRX, 5);
-		ReadWriteNRF(W, TX_ADDR, addrTX, 5);
-		ReadWriteNRF(W, RX_PW_P4, values, 1);
-		break;
-		case 5:
-		ReadWriteNRF(W, RX_ADDR_P5, addrRX, 5);
-		ReadWriteNRF(W, TX_ADDR, addrTX, 5);
-		ReadWriteNRF(W, RX_PW_P5, values, 1);
-		break;
-	}
-
-	// set nRF mode - receiver or transmitter
-	if(mode == 'T') // set module as TX
-	{
-		// CONFIG register setup (transmitter, pwr up)
-		values[0] = 0x5E;//0b0101 1110
-		ReadWriteNRF(W, CONFIG, values, 1);
-	}
-	else // set module as RX
-	{
-		// CONFIG register setup (receiver, pwr up)
-		values[0] = 0x5F;//0b0101 1110
-		ReadWriteNRF(W, CONFIG, values, 1);
-	}
-
-	// for reaching stand by mode
-	_delay_ms(100);
-}
-
-void transmit_data(uint8_t *data)
-{
-	ReadWriteNRF(W, FLUSH_TX, data, 0); // clear the buffer
-	ReadWriteNRF(W, W_TX_PAYLOAD, data, 5); // because payload is 5 bytes
-
-	_delay_ms(10);
-	set_bit(CE); // enable nrf for TX
-	_delay_us(1000); // wait atleast 10uS
-	clear_bit(CE); // disable TX
-	_delay_us(10);
-
-	resetNrf();
 }
 
 // command tells this function what data to expect
@@ -377,6 +320,9 @@ void receive_data(int command)
             {
                 printf("Temperature: %d\n", receivedData[3]);
                 printf("Humdity: %d\n\n\n", receivedData[4]);
+
+                temperature = receivedData[3];
+                humidity = receivedData[4];
             }
             // emergency button message arrived
             else if(command == STATE_UPDATE)
@@ -389,12 +335,12 @@ void receive_data(int command)
                     if(receivedData[3])
                     {
                         printf("Now relay 1 is ON.\n");
-                        relay1State = 1;
+                        relayState = 1;
                     }
                     else
                     {
                         printf("Now relay 1 is OFF.\n");
-                        relay1State = 1;
+                        relayState = 1;
                     }
                     // send response that state update message was received
 
@@ -414,17 +360,17 @@ void receive_data(int command)
                 // make sure this is 0
                 sendSuccessfully = 0;
             }
-            else if(command == FIND_STATE)
+            else if(command == FIND_STATE_COM)
             {
                 if(receivedData[4])
                 {
                     printf("Now relay is ON.\n");
-                    relay1State = 1;
+                    relayState = 1;
                 }
                 else
                 {
                     printf("Now relay is OFF.\n");
-                    relay1State = 0;
+                    relayState = 0;
                 }
             }
         }
@@ -473,37 +419,74 @@ void ISR()
         printf("Lights toggled!\n");
         sendSuccessfully = 1;
         // invert relay1State
-        relay1State = (relay1State == 1) ? 0 : 1;
+        relayState = (relayState == 1) ? 0 : 1;
     }
 }
 
-// after every received/transmitted payload IRQ must be reseted
-void resetNrf(void)
+void CopyAllDataToTempDB(sqlite3* db, char *message, char *errMsg)
 {
-	_delay_us(10);
-	clear_bit(SS); // enable slave
-	_delay_us(10);
-	bcm2835_spi_transfer(W_REGISTER + STATUS);
-	_delay_us(10);
-	bcm2835_spi_transfer(0x70); // reset all irq in status register
-	_delay_us(10);
-	set_bit(SS); // disable slave
+    printf("Now copying data to temp db\n");
+
+    // this would be executed after all command have been sent
+    char *sql = "DELETE FROM thingsTemp; INSERT INTO thingsTemp SELECT * FROM things;";
+    sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
 }
 
-void changeNrfToRX()
+static int InitializeAllData(void *data, int columns, char **argv, char **colNames)
 {
-	uint8_t values[1];
-	// CONFIG register setup (receiver, pwr up)
-	values[0] = 0x5F;//0b0101 1110
-	ReadWriteNRF(W, CONFIG, values, 1);
-	_delay_ms(100);
+    // print query results
+    for(int i = 0; i < columns; i++)
+    {
+        // if this is light group
+        if(strcmp(argv[i], "lights") == 0)
+        {
+            printf("Lights found\n");
+            Relay r;
+            r.id = atoi (argv[0]);
+
+            char relayName[50];
+            sprintf(relayName, "relay%d", r.id);
+            strcpy(r.name, relayName);
+
+            r.command = RELAY1_STATE + arr.used;
+            r.state = (strcmp(argv[3], "ON") == 0) ? 1 : 0;
+            insertArray(&arr, r);
+        }
+    }
+
+    printf("\n");
+    return 0;
 }
 
-void changeNrfToTX()
+static int compareTables(void *data, int columns, char **argv, char **colNames)
 {
-	uint8_t values[1];
-	// CONFIG register setup (transmitter, pwr up)
-	values[0] = 0x5E;//0b0101 1110
-	ReadWriteNRF(W, CONFIG, values, 1);
-	_delay_ms(100);
+    // mark tark difference was found
+    diffFound = 1;
+
+    // print query results
+    for(int i = 0; i < columns; i++)
+    {
+        if(strcmp(argv[i], "lights") == 0)
+        {
+            // get the light ID
+            uint8_t id = atoi(argv[0]);
+            // go through all relays to find the one that need to be updated
+            for(int i = 0; i < arr.used; i++){
+                if(arr.array[i].id == id){
+                    printf("%s need to updated\n", arr.array[i].name);
+                    printf("Before: state %d\n", arr.array[i].state);
+                    arr.array[i].state = (strcmp(argv[3], "ON") == 0) ? 1 : 0;
+                    printf("After: state %d\n", arr.array[i].state);
+                }
+            }
+        }
+    }
+
+    printf("\n");
+    return 0;
+}
+
+static int callbackDummy(void *data, int columns, char **argv, char **colNames)
+{
+    return 0;
 }

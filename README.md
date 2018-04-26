@@ -49,3 +49,9 @@ EDIT6:
 Added functionality to send PIR motion sensor state to RPi whenever it is triggered i. e. something moves in fron of it. 
 Cleaned up code.
 PIR sensor hold its pin HIGH for about 4 seconds so RPi receives around 3 updates and also those updates keep atmega busy -> not very responsive light switching!! 
+
+-----------------------------------------------------------------------------------------------------------------------------------------------
+EDIT7:
+Added functionality to communicate with database (sqlite3). Now there is possible to fetch all data, found all lights (by group_name) and store them in dynamic Array.
+Each array item is relay struct, which consists of id, name, state and command (which is used to toggle relay). Then it's possible to receive actual relay state and
+update db if it's not matching. Lastly, received temperature and humidity data is pushed into db.

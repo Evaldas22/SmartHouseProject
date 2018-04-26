@@ -2,24 +2,20 @@
 <CodeBlocks_layout_file>
 	<FileVersion major="1" minor="0" />
 	<ActiveTarget name="Debug" />
-	<File name="main.c" open="1" top="1" tabpos="1" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
-		<Cursor>
-			<Cursor1 position="3860" topLine="122" />
-		</Cursor>
-		<Folding>
-			<Collapse line="188" />
-			<Collapse line="205" />
-			<Collapse line="243" />
-			<Collapse line="327" />
-			<Collapse line="468" />
-			<Collapse line="481" />
-			<Collapse line="493" />
-			<Collapse line="502" />
-		</Folding>
-	</File>
 	<File name="nRF24L01.h" open="0" top="0" tabpos="2" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
 		<Cursor>
 			<Cursor1 position="1186" topLine="19" />
 		</Cursor>
+	</File>
+	<File name="main.c" open="1" top="1" tabpos="1" split="0" active="1" splitpos="0" zoom_1="0" zoom_2="0">
+		<Cursor>
+			<Cursor1 position="6419" topLine="203" />
+		</Cursor>
+		<Folding>
+			<Collapse line="243" />
+			<Collapse line="254" />
+			<Collapse line="414" />
+			<Collapse line="426" />
+		</Folding>
 	</File>
 </CodeBlocks_layout_file>
