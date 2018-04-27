@@ -1,6 +1,6 @@
 /*
- * MUST COMPILE THIS PROGRAM WITH -lbcm2835
- * gcc spi_test_BCM.c -o <output_file_name> -lbcm2835
+ * MUST COMPILE THIS PROGRAM WITH -lbcm2835 and -lsqlite3
+ * gcc spi_test_BCM.c -o <output_file_name> -lbcm2835 -lsqlite3
 */
 // ---------------------Includes-----------------------------
 #include "nRF24L01.h"
@@ -81,14 +81,15 @@ volatile int diffFound = 0;
 // ---------------------------------------------------------
 
 //-------------------------functions------------------------
-void RequestFrom(uint8_t *addr);
+void ToggleRelay(uint8_t whichDevice, Relay whichRelay);
+void FindRelayStatus(uint8_t whichDevice, Relay whichRelay);
+void SendRequestTo(uint8_t *addr);
 void receive_data(int command);
 void ISR();
 static int callbackDummy(void *data, int columns, char **argv, char **colNames);
 static int compareTables(void *data, int columns, char **argv, char **colNames);
 static int InitializeAllData(void *data, int columns, char **argv, char **colNames);
 void CopyAllDataToTempDB(sqlite3* db, char *message, char *errMsg);
-void FindRelayStatus(uint8_t whichDevcice, uint8_t whichRelay);
 // ---------------------------------------------------------
 
 volatile uint8_t sendSuccessfully = 0;
@@ -97,6 +98,14 @@ Array arr;
 
 uint8_t relayState;
 uint8_t temperature, humidity;
+
+// db variables
+const char* message = "Callback function called";
+char *errMsg = 0;
+char *sql;
+
+// database object
+sqlite3 *db;
 
 int main()
 {
@@ -158,14 +167,6 @@ int main()
 	initArray(&arr, 1);
 	printf("Start. There are total %d relays\n", arr.used);
 
-	// db variables
-    const char* message = "Callback function called";
-    char *errMsg = 0;
-    char *sql;
-
-    // database object
-    sqlite3 *db;
-
     // open database
     int status = sqlite3_open("/home/pi/things.db", &db);
 
@@ -183,7 +184,7 @@ int main()
 
     // make sure db has real statuses
     for(int i = 0; i < arr.used; i++){
-        FindRelayStatus(ATMEGA16, arr.array[i].command);
+        FindRelayStatus(ATMEGA16, arr.array[i]);
         if(relayState != arr.array[i].state){
             // update state in db
             printf("Updating state in DB\n");
@@ -208,7 +209,7 @@ int main()
             firstTime = 0;
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            RequestFrom(atmega16DHT11);
+            SendRequestTo(atmega16DHT11);
             printf("Updating DB\n");
 
             char temp[200];
@@ -219,6 +220,9 @@ int main()
             sprintf(temp, "UPDATE things SET value = '%d' where name = 'Humidity';", humidity);
             sql = temp;
             status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+
+            // toggle relay2
+            ToggleRelay(ATMEGA16, arr.array[0]);
         }
 
         // when set time interval is past do this
@@ -227,7 +231,7 @@ int main()
         {
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            RequestFrom(atmega16DHT11);
+
         }
 
         // while not sending any commands listen for any emergency messages
@@ -240,18 +244,35 @@ int main()
     return 0;
 }
 
-void FindRelayStatus(uint8_t whichDevcice, uint8_t whichRelay)
+void ToggleRelay(uint8_t whichDevice, Relay whichRelay)
 {
-    if(whichDevcice == ATMEGA16)
+    if(whichDevice == ATMEGA16)
     {
-       uint8_t commandToSend[5] = {0x41, 0x42, whichRelay, FIND_STATE, 0x16};
-       printf("Senging command: %02x\n", whichRelay);
-       RequestFrom(commandToSend);
-    }
+       uint8_t commandToSend[5] = {0x41, 0x42, whichRelay.command, RELAY_TOGGLE, 0x16};
+       printf("Senging command: %02x\n", whichRelay.command);
+       SendRequestTo(commandToSend);
 
+       // we need to update the db
+        char *value = (relayState) ? "ON" : "OFF";
+        char temp[200];
+        sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, whichRelay.id);
+        sql = temp;
+        int status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+    }
 }
 
-void RequestFrom(uint8_t *addr)
+void FindRelayStatus(uint8_t whichDevice, Relay whichRelay)
+{
+    if(whichDevice == ATMEGA16)
+    {
+       uint8_t commandToSend[5] = {0x41, 0x42, whichRelay.command, FIND_STATE, 0x16};
+       printf("Senging command: %02x\n", whichRelay.command);
+       SendRequestTo(commandToSend);
+       // relay state will be updated in ISR function
+    }
+}
+
+void SendRequestTo(uint8_t *addr)
 {
     uint8_t retries = 0;
     sendSuccessfully = 0;
@@ -327,29 +348,39 @@ void receive_data(int command)
             // emergency button message arrived
             else if(command == STATE_UPDATE)
             {
-                // if relay1 was toggled
-                if(receivedData[4] == RELAY1_STATE)
+                // now I need to find which relay was updated
+                for(int i = 0; i < arr.used; i++)
                 {
-                    printf("Relay 1 was toggled.\n");
-
-                    if(receivedData[3])
+                    // if one of relay commands match
+                    if(receivedData[4] == arr.array[i].command)
                     {
-                        printf("Now relay 1 is ON.\n");
-                        relayState = 1;
-                    }
-                    else
-                    {
-                        printf("Now relay 1 is OFF.\n");
-                        relayState = 1;
-                    }
-                    // send response that state update message was received
+                        printf("%s was toggled.\n", arr.array[i].name);
+                        if(receivedData[3])
+                        {
+                            printf("Now %s is ON.\n", arr.array[i].name);
+                            relayState = 1;
+                        }
+                        else
+                        {
+                            printf("Now %s is OFF.\n", arr.array[i].name);
+                            relayState = 0;
+                        }
+                        printf("Updating state in DB\n");
+                        char *value = (relayState) ? "ON" : "OFF";
+                        char temp[200];
+                        sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, arr.array[i].id);
+                        sql = temp;
+                        int status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+                        // send response that state update message was received
 
-                    changeNrfToTX();
-                    uint8_t gotMessage[5] = {0x41, 0x42, 0x43, STATE_UPDATE_ANSWER, 0x16};
-                    transmit_data(gotMessage);
-                    changeNrfToRX();
+                        changeNrfToTX();
+                        uint8_t gotMessage[5] = {0x41, 0x42, 0x43, STATE_UPDATE_ANSWER, 0x16};
+                        transmit_data(gotMessage);
+                        changeNrfToRX();
+                    }
                 }
-                else if(receivedData[4] == PIR_STATE)
+
+                if(receivedData[4] == PIR_STATE)
                 {
                     printf("PIR motion sensor was triggered.\n");
                     changeNrfToTX();
@@ -381,31 +412,8 @@ void receive_data(int command)
         }
 
 	}
-	// else means there is no data waiting
-	else
-	{
-        sendSuccessfully = 0;
-        //printf("No data.\n");
-        /*
-        if (command == RELAY1)
-        {
-            sendSuccessfully = 1; // pretend that data was sent. Not very good solution
-            printf("Lights switched!\n");
-        }
-        // only send debug info when it's RPi request, not emergency message
-
-        else if(command != BUTTON1)
-        {
-            receivedData = ReadWriteNRF(R, R_RX_PAYLOAD, receivedData, 5);
-            printf("No data for you!!\n");
-            sendSuccessfully = 0;
-            printf("\n------DEBUG INFO------\n");
-            printf("STATUS REGISTER: %02x\n", ReadRegister(STATUS));
-            printf("DATA: %s\n", receivedData);
-            printf("------DEBUG INFO END------\n");
-        }
-        */
-	}
+	// else means there is no data received
+	else sendSuccessfully = 0;
 
 	resetNrf();
 }
