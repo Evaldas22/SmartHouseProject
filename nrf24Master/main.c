@@ -84,12 +84,12 @@ volatile int diffFound = 0;
 void ToggleRelay(uint8_t whichDevice, Relay whichRelay);
 void FindRelayStatus(uint8_t whichDevice, Relay whichRelay);
 void SendRequestTo(uint8_t *addr);
-void receive_data(int command);
+void Receive_data(int command);
 void ISR();
-static int callbackDummy(void *data, int columns, char **argv, char **colNames);
-static int compareTables(void *data, int columns, char **argv, char **colNames);
+static int CallbackDummy(void *data, int columns, char **argv, char **colNames);
+static int CompareTables(void *data, int columns, char **argv, char **colNames);
 static int InitializeAllData(void *data, int columns, char **argv, char **colNames);
-void CopyAllDataToTempDB(sqlite3* db, char *message, char *errMsg);
+void CopyAllDataToTempDB();
 // ---------------------------------------------------------
 
 volatile uint8_t sendSuccessfully = 0;
@@ -192,12 +192,12 @@ int main()
             char temp[200];
             sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, arr.array[i].id);
             sql = temp;
-            status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
         }
     }
 
     //after relays are synced make a copy of data
-    CopyAllDataToTempDB(db, message, errMsg);
+    CopyAllDataToTempDB();
 
     while (1)
     {
@@ -215,28 +215,34 @@ int main()
             char temp[200];
             sprintf(temp, "UPDATE things SET value = '%d' where name = 'Temperature';", temperature);
             sql = temp;
-            status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
 
             sprintf(temp, "UPDATE things SET value = '%d' where name = 'Humidity';", humidity);
             sql = temp;
-            status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+
+            CopyAllDataToTempDB();
 
             // toggle relay2
-            ToggleRelay(ATMEGA16, arr.array[0]);
+            //ToggleRelay(ATMEGA16, arr.array[0]);
         }
 
         // when set time interval is past do this
-
         if ((int)difftime(myTime, startTime) >= TIME_INTERVAL_SEC)
         {
             startTime = myTime;
-            printf("\nTime when sent: %s\n", ctime(&myTime));
-
+            printf("\nTime: %s\n", ctime(&myTime));
         }
 
-        // while not sending any commands listen for any emergency messages
+        //--------------COMPARE TWO TABLES------------------------
+        printf("Now comparing two tables\n");
+        // query to find values from things that are not in thingsTemp i. e. find what's changed
+        sql = "SELECT id, name, group_name, value FROM things EXCEPT SELECT id, name, group_name, value FROM thingsTemp;";
+        status = sqlite3_exec(db, sql, CompareTables, (void *) message, &errMsg);
+
+        // while not sending any commands listen for any state messages
         changeNrfToRX();
-        receive_data(STATE_UPDATE);
+        Receive_data(STATE_UPDATE);
         changeNrfToTX();
     }
     bcm2835_close();
@@ -257,7 +263,9 @@ void ToggleRelay(uint8_t whichDevice, Relay whichRelay)
         char temp[200];
         sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, whichRelay.id);
         sql = temp;
-        int status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+        int status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+
+        CopyAllDataToTempDB();
     }
 }
 
@@ -292,9 +300,9 @@ void SendRequestTo(uint8_t *addr)
         changeNrfToRX();
 
         // depends on command addr what command option to pass
-        if(addr[3] == 0x44) receive_data(REGULAR);
-        else if(addr[3] == DHT11_REQUEST) receive_data(DHT11);
-        else if(addr[3] == FIND_STATE) receive_data(FIND_STATE_COM);
+        if(addr[3] == 0x44) Receive_data(REGULAR);
+        else if(addr[3] == DHT11_REQUEST) Receive_data(DHT11);
+        else if(addr[3] == FIND_STATE) Receive_data(FIND_STATE_COM);
 
         delay(1000);
         changeNrfToTX();
@@ -303,7 +311,7 @@ void SendRequestTo(uint8_t *addr)
 }
 
 // command tells this function what data to expect
-void receive_data(int command)
+void Receive_data(int command)
 {
     uint8_t dummy[1];
     ReadWriteNRF(W, FLUSH_RX, dummy, 0); // clear the RX buffer
@@ -370,9 +378,11 @@ void receive_data(int command)
                         char temp[200];
                         sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, arr.array[i].id);
                         sql = temp;
-                        int status = sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
-                        // send response that state update message was received
+                        int status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
 
+                        CopyAllDataToTempDB();
+
+                        // send response that state update message was received
                         changeNrfToTX();
                         uint8_t gotMessage[5] = {0x41, 0x42, 0x43, STATE_UPDATE_ANSWER, 0x16};
                         transmit_data(gotMessage);
@@ -431,13 +441,13 @@ void ISR()
     }
 }
 
-void CopyAllDataToTempDB(sqlite3* db, char *message, char *errMsg)
+void CopyAllDataToTempDB()
 {
     printf("Now copying data to temp db\n");
 
     // this would be executed after all command have been sent
     char *sql = "DELETE FROM thingsTemp; INSERT INTO thingsTemp SELECT * FROM things;";
-    sqlite3_exec(db, sql, callbackDummy, (void *) message, &errMsg);
+    sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
 }
 
 static int InitializeAllData(void *data, int columns, char **argv, char **colNames)
@@ -466,7 +476,7 @@ static int InitializeAllData(void *data, int columns, char **argv, char **colNam
     return 0;
 }
 
-static int compareTables(void *data, int columns, char **argv, char **colNames)
+static int CompareTables(void *data, int columns, char **argv, char **colNames)
 {
     // mark tark difference was found
     diffFound = 1;
@@ -479,10 +489,13 @@ static int compareTables(void *data, int columns, char **argv, char **colNames)
             // get the light ID
             uint8_t id = atoi(argv[0]);
             // go through all relays to find the one that need to be updated
-            for(int i = 0; i < arr.used; i++){
-                if(arr.array[i].id == id){
+            for(int i = 0; i < arr.used; i++)
+            {
+                if(arr.array[i].id == id)
+                {
                     printf("%s need to updated\n", arr.array[i].name);
                     printf("Before: state %d\n", arr.array[i].state);
+                    ToggleRelay(ATMEGA16, arr.array[i]);
                     arr.array[i].state = (strcmp(argv[3], "ON") == 0) ? 1 : 0;
                     printf("After: state %d\n", arr.array[i].state);
                 }
@@ -494,7 +507,7 @@ static int compareTables(void *data, int columns, char **argv, char **colNames)
     return 0;
 }
 
-static int callbackDummy(void *data, int columns, char **argv, char **colNames)
+static int CallbackDummy(void *data, int columns, char **argv, char **colNames)
 {
     return 0;
 }
