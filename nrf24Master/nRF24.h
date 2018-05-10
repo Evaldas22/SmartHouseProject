@@ -111,7 +111,7 @@ void Nrf24_init(uint8_t pipe, uint8_t *addrRX, uint8_t *addrTX,  char mode)
 	ReadWriteNRF(W, SETUP_AW, values, 1);
 
 	// RF channel setup (2400 - 2525) 1MHz step. 125 channels
-	values[0] = 0x01; // 1st channel
+	values[0] = 0x6C; // 108 channel
 	ReadWriteNRF(W, RF_CH, values, 1);
 
 	// RF power mode and data speed setup

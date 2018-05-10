@@ -19,6 +19,7 @@ typedef struct {
    char         name[50]; // relay + id
    uint8_t      command; // commands start from 0xf1
    uint8_t      state; // state depend on value from db
+   int          device; // device number is same as in db
 } Relay;
 
 typedef struct {
@@ -46,13 +47,16 @@ void freeArray(Array *a) {
   a->array = NULL;
   a->used = a->size = 0;
 }
-
-volatile int diffFound = 0;
 // ---------------------Defines-----------------------------
 #define _delay_us(x) bcm2835_delayMicroseconds(x)
 #define _delay_ms(x) bcm2835_delay(x)
 #define set_bit(pin) bcm2835_gpio_write(pin, HIGH)
 #define clear_bit(pin) bcm2835_gpio_write(pin, LOW)
+
+// STATUSES
+#define ON 1
+#define OFF 0
+#define NOT_FOUND 2
 
 // command defines
 #define REGULAR 0
@@ -68,19 +72,23 @@ volatile int diffFound = 0;
 #define RELAY_TOGGLE 0x51
 #define FIND_STATE 0x52
 #define PIR_STATE 0x30
+#define ERROR 0x05
+#define TURN_OFF_PIR 0xA1
+#define TURN_ON_PIR 0xA0
 
 #define TIME_INTERVAL_SEC 60
 #define MAX_RETRIES 10
 
-#define ATMEGA16 0x20
-
+#define ATMEGA16 16
+#define ATMEGA328 32
 // Some pins
 #define CE RPI_GPIO_P1_22 // GPIO25
 #define SS RPI_GPIO_P1_18 // GPIO24. I'll use this to manually control NRF Slave select pin
-#define IRQ_PIN 29 // GPIO21
+#define IRQ_PIN 28 // GPIO20
 // ---------------------------------------------------------
 
 //-------------------------functions------------------------
+void CheckIfDeviceIsOn(uint8_t whichDevice);
 void ToggleRelay(uint8_t whichDevice, Relay whichRelay);
 void FindRelayStatus(uint8_t whichDevice, Relay whichRelay);
 void SendRequestTo(uint8_t *addr);
@@ -94,9 +102,10 @@ void CopyAllDataToTempDB();
 
 volatile uint8_t sendSuccessfully = 0;
 volatile uint8_t sendingRelayCommand = 0;
-Array arr;
+Array arr, notFoundRelays;
 
 uint8_t relayState;
+uint8_t ATMEGA16On, ATMEGA32On;
 uint8_t temperature, humidity;
 
 // db variables
@@ -144,13 +153,7 @@ int main()
 	uint8_t txAddrFirstTX[5] = {0x12, 0x12, 0x12, 0x12, 0x12};
 
 	// commands for atmega16
-	uint8_t atmega16Address[5] = {0x41, 0x42, 0x43, 0x44, 0x16};
 	uint8_t atmega16DHT11[5] = {0x41, 0x42, 0x43, DHT11_REQUEST, 0x16};
-	uint8_t atmega16ToggleRelay[5] = {0x41, 0x42, RELAY1_STATE, RELAY_TOGGLE, 0x16};
-	uint8_t atmega16FindRelayStatus[5] = {0x41, 0x42, RELAY1_STATE, FIND_STATE, 0x16};
-
-    // command for atmega328p
-	uint8_t atmega328Address[5] = {0x11, 0x11, 0x11, 0x11, 0x32};
 
     // Initialize nrf as transmitter
 	Nrf24_init(0, rxAddrFirstTX, txAddrFirstTX, 'T');
@@ -165,10 +168,13 @@ int main()
 	int firstTime = 1;
 
 	initArray(&arr, 1);
+	initArray(&notFoundRelays, 1);
 	printf("Start. There are total %d relays\n", arr.used);
 
     // open database
-    int status = sqlite3_open("/home/pi/things.db", &db);
+    int status = sqlite3_open("/home/pi/Desktop/SmartHome-Project/public/db/IoT.db", &db);
+
+    //sqlite3_exec(db, "PRAGMA journal_mode = WAL", NULL, NULL, NULL);
 
     if(status)
     {
@@ -182,22 +188,62 @@ int main()
 
     printf("After query. There are total %d relays\n", arr.used);
 
+
+    CheckIfDeviceIsOn(ATMEGA16);
+    if(ATMEGA16On) printf("ATMEGA16 is ON\n");
+
     // make sure db has real statuses
     for(int i = 0; i < arr.used; i++){
-        FindRelayStatus(ATMEGA16, arr.array[i]);
-        if(relayState != arr.array[i].state){
+        // find relay status of certain device
+        // only send if device is ON
+        if(arr.array[i].device == 16 && ATMEGA16On)
+        {
+            relayState = NOT_FOUND;
+            FindRelayStatus(arr.array[i].device, arr.array[i]);
+        }
+
+        // if relay was not found
+        if(relayState == NOT_FOUND){
+            // just add not found relay to array
+            insertArray(&notFoundRelays, arr.array[i]);
+        }
+        // if received relay state doesnt match with the one in db - update db
+        else if(relayState != arr.array[i].state){
             // update state in db
             printf("Updating state in DB\n");
             char *value = (relayState) ? "ON" : "OFF";
             char temp[200];
-            sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, arr.array[i].id);
+            sprintf(temp, "UPDATE things SET value = '%s' WHERE id = %d;", value, arr.array[i].id);
             sql = temp;
             status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
         }
     }
 
+    // now it's time to send one UPDATE query for all not found relays
+    char temp[200];
+    sprintf(temp, "UPDATE things SET value = 'Not responded' WHERE id IN (");
+    sql = temp;
+    // go through all not found relays and finish constructing query
+    for(int i = 0; i < notFoundRelays.used; i++){
+        char temp1[10];
+        // if this is the last item
+        if(i == notFoundRelays.used - 1){
+            sprintf(temp1, "%d);", notFoundRelays.array[i].id);
+            strcat(sql, temp1);
+        }
+        else {
+            sprintf(temp1, "%d, ", notFoundRelays.array[i].id);
+            strcat(sql, temp1);
+        }
+    }
+    // now exucute the UPDATE query
+    status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+
     //after relays are synced make a copy of data
     CopyAllDataToTempDB();
+
+    uint8_t command[5] = {0x41, 0x42, 0x43, TURN_OFF_PIR, 0x16};
+    SendRequestTo(command);
 
     while (1)
     {
@@ -224,7 +270,7 @@ int main()
             CopyAllDataToTempDB();
 
             // toggle relay2
-            //ToggleRelay(ATMEGA16, arr.array[0]);
+            //ToggleRelay(arr.array[0].device, arr.array[0]);//
         }
 
         // when set time interval is past do this
@@ -245,27 +291,44 @@ int main()
         Receive_data(STATE_UPDATE);
         changeNrfToTX();
     }
+
     bcm2835_close();
     sqlite3_close(db);
     return 0;
+}
+
+void CheckIfDeviceIsOn(uint8_t whichDevice)
+{
+    if(whichDevice == ATMEGA16)
+    {
+        uint8_t atmega16Address[5] = {0x41, 0x42, 0x43, 0x44, 0x16};
+        ATMEGA16On = 0;
+        SendRequestTo(atmega16Address);
+    }
+    else if(whichDevice == ATMEGA328)
+    {
+        uint8_t atmega328Address[5] = {0x41, 0x42, 0x43, 0x44, 0x32};
+        ATMEGA32On = 0;
+        SendRequestTo(atmega328Address);
+    }
 }
 
 void ToggleRelay(uint8_t whichDevice, Relay whichRelay)
 {
     if(whichDevice == ATMEGA16)
     {
-       uint8_t commandToSend[5] = {0x41, 0x42, whichRelay.command, RELAY_TOGGLE, 0x16};
-       printf("Senging command: %02x\n", whichRelay.command);
-       SendRequestTo(commandToSend);
+        uint8_t commandToSend[5] = {0x41, 0x42, whichRelay.command, RELAY_TOGGLE, 0x16};
+        //printf("Senging command: %02x\n", whichRelay.command);
+        SendRequestTo(commandToSend);
+        FindRelayStatus(whichDevice, whichRelay);
 
-       // we need to update the db
-        char *value = (relayState) ? "ON" : "OFF";
+        // we need to update the db
+        char *value = (relayState == 1) ? "ON" : "OFF";
         char temp[200];
-        sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, whichRelay.id);
+        sprintf(temp, "UPDATE things SET value = '%s' where id = %d; DELETE FROM thingsTemp; INSERT INTO thingsTemp SELECT * FROM things;", value, whichRelay.id);
         sql = temp;
-        int status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
-
-        CopyAllDataToTempDB();
+        sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+        //CopyAllDataToTempDB();
     }
 }
 
@@ -274,7 +337,7 @@ void FindRelayStatus(uint8_t whichDevice, Relay whichRelay)
     if(whichDevice == ATMEGA16)
     {
        uint8_t commandToSend[5] = {0x41, 0x42, whichRelay.command, FIND_STATE, 0x16};
-       printf("Senging command: %02x\n", whichRelay.command);
+       //printf("Senging command: %02x\n", whichRelay.command);
        SendRequestTo(commandToSend);
        // relay state will be updated in ISR function
     }
@@ -293,18 +356,18 @@ void SendRequestTo(uint8_t *addr)
             sendingRelayCommand = 1; // must set this before sending
         }
 
-        printf("Trying to send!!\n");
+        printf("Retries: %d\n", retries);
         transmit_data(addr);
         //_delay_ms(5);
 
         changeNrfToRX();
-
         // depends on command addr what command option to pass
         if(addr[3] == 0x44) Receive_data(REGULAR);
         else if(addr[3] == DHT11_REQUEST) Receive_data(DHT11);
         else if(addr[3] == FIND_STATE) Receive_data(FIND_STATE_COM);
+        else if(addr[3] == TURN_OFF_PIR || addr[3] == TURN_ON_PIR ) Receive_data(REGULAR);
 
-        delay(1000);
+        delay(200);
         changeNrfToTX();
         retries++;
     }
@@ -317,7 +380,7 @@ void Receive_data(int command)
     ReadWriteNRF(W, FLUSH_RX, dummy, 0); // clear the RX buffer
 
 	set_bit(CE); // enable for listening
-	_delay_ms(1000); // listen for 1s
+	_delay_ms(700); // listen for 1s
 	clear_bit(CE); // stop listening
 
 	// create empty array
@@ -342,7 +405,8 @@ void Receive_data(int command)
             // regular respnse arrived
             if(command == REGULAR)
             {
-                printf("Data: %s\n\n\n", receivedData);
+                //printf("Data: %s\n\n\n", receivedData);
+                ATMEGA16On = 1;
             }
             // dht11 sensor response arrived
             else if(command == DHT11)
@@ -373,20 +437,23 @@ void Receive_data(int command)
                             printf("Now %s is OFF.\n", arr.array[i].name);
                             relayState = 0;
                         }
+
+                        // send response that state update message was received
+                        changeNrfToTX();
+                        uint8_t gotMessage[5] = {0x41, 0x42, 0x43, STATE_UPDATE_ANSWER, 0x16};
+                        printf("Sending answer back...\n");
+                        transmit_data(gotMessage);
+                        changeNrfToRX();
+                        _delay_ms(100);
+
                         printf("Updating state in DB\n");
                         char *value = (relayState) ? "ON" : "OFF";
                         char temp[200];
                         sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, arr.array[i].id);
                         sql = temp;
-                        int status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+                        sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
 
                         CopyAllDataToTempDB();
-
-                        // send response that state update message was received
-                        changeNrfToTX();
-                        uint8_t gotMessage[5] = {0x41, 0x42, 0x43, STATE_UPDATE_ANSWER, 0x16};
-                        transmit_data(gotMessage);
-                        changeNrfToRX();
                     }
                 }
 
@@ -403,7 +470,12 @@ void Receive_data(int command)
             }
             else if(command == FIND_STATE_COM)
             {
-                if(receivedData[4])
+                if (receivedData[4] == ERROR)
+                {
+                    printf("Relay is not available\n");
+                    relayState = 2;
+                }
+                else if(receivedData[4])
                 {
                     printf("Now relay is ON.\n");
                     relayState = 1;
@@ -423,7 +495,10 @@ void Receive_data(int command)
 
 	}
 	// else means there is no data received
-	else sendSuccessfully = 0;
+	else{
+        sendSuccessfully = 0;
+        relayState = 2;
+    }
 
 	resetNrf();
 }
@@ -434,17 +509,15 @@ void ISR()
     // if relay command is being sent
     if(sendingRelayCommand)
     {
-        printf("Lights toggled!\n");
         sendSuccessfully = 1;
-        // invert relay1State
+        // invert relayState
         relayState = (relayState == 1) ? 0 : 1;
     }
 }
 
 void CopyAllDataToTempDB()
 {
-    printf("Now copying data to temp db\n");
-
+    //printf("Now copying data to temp db\n");
     // this would be executed after all command have been sent
     char *sql = "DELETE FROM thingsTemp; INSERT INTO thingsTemp SELECT * FROM things;";
     sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
@@ -458,7 +531,6 @@ static int InitializeAllData(void *data, int columns, char **argv, char **colNam
         // if this is light group
         if(strcmp(argv[i], "lights") == 0)
         {
-            printf("Lights found\n");
             Relay r;
             r.id = atoi (argv[0]);
 
@@ -468,19 +540,15 @@ static int InitializeAllData(void *data, int columns, char **argv, char **colNam
 
             r.command = RELAY1_STATE + arr.used;
             r.state = (strcmp(argv[3], "ON") == 0) ? 1 : 0;
+            r.device = atoi (argv[5]);
             insertArray(&arr, r);
         }
     }
-
-    printf("\n");
     return 0;
 }
 
 static int CompareTables(void *data, int columns, char **argv, char **colNames)
 {
-    // mark tark difference was found
-    diffFound = 1;
-
     // print query results
     for(int i = 0; i < columns; i++)
     {
@@ -493,17 +561,15 @@ static int CompareTables(void *data, int columns, char **argv, char **colNames)
             {
                 if(arr.array[i].id == id)
                 {
-                    printf("%s need to updated\n", arr.array[i].name);
-                    printf("Before: state %d\n", arr.array[i].state);
-                    ToggleRelay(ATMEGA16, arr.array[i]);
+                    //printf("%s need to updated\n", arr.array[i].name);
+                    //printf("Before: state %d\n", arr.array[i].state);
+                    ToggleRelay(arr.array[i].device, arr.array[i]);
                     arr.array[i].state = (strcmp(argv[3], "ON") == 0) ? 1 : 0;
-                    printf("After: state %d\n", arr.array[i].state);
+                    //printf("After: state %d\n", arr.array[i].state);
                 }
             }
         }
     }
-
-    printf("\n");
     return 0;
 }
 

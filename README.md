@@ -64,3 +64,7 @@ Added more functionality to communicate with database (sqlite3). Now it's possib
 EDIT 9:
 Added functionality to constantly compare two tables and whenever the difference is found and if that difference is in lights, send command to
 appropriate relay to match the difference. So whenever a user pushes a button in web app, the state in db will change and my program will find it.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------
+EDIT 10: Added functionality to only check specific device lights if that device responds. Also added new command to turn on/off PIR sensor, because if you move a lot
+you'll be spammed with PIR messages, saying that PIR is triggered. Cleaned up code, added some helper functions.
