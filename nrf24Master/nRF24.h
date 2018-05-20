@@ -20,7 +20,7 @@
 // Some pins
 #define CE RPI_GPIO_P1_22 // GPIO25
 #define SS RPI_GPIO_P1_18 // GPIO24. I'll use this to manually control NRF Slave select pin
-#define IRQ_PIN 29 // GPIO21
+//#define IRQ_PIN 29 // GPIO21
 
 //-------------------------functions------------------------
 uint8_t ReadRegister(uint8_t reg);
