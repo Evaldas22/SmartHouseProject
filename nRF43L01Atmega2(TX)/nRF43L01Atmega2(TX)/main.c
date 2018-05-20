@@ -186,7 +186,6 @@ ISR(INT0_vect)
 	if (data[4] == DEVICE_ADDR)
 	{		
 		if(data[3] == DHT11_REQUEST) SendDHT11Data();
-		
 		else if(data[3] == STATE_UPDATE_ANSWER) successfullySend = 1;
 		
 		else if(data[3] == RELAY_TOGGLE) 
@@ -244,7 +243,11 @@ void SendDHT11Data()
 	CheckSum = Receive_data_DHT11();
 	
 	// check sum
-	if ((humidity + D_RH + temperature + D_Temp) != CheckSum){}
+	if ((humidity + D_RH + temperature + D_Temp) != CheckSum){
+		clear_bit(PORTB, PB0);
+		_delay_ms(200);
+		set_bit(PORTB, PB0);
+	}
 	
 	// send actual data back
 	uint8_t answer[5] = {0x41, 0x42, 0x43, temperature, humidity};
@@ -259,6 +262,7 @@ void Request()
 	set_bit(DDRD, DHT11_PIN);
 	clear_bit(PORTD, DHT11_PIN); 
 	_delay_ms(20);
+	//_delay_us(500);
 	set_bit(PORTD, DHT11_PIN);
 }
 
