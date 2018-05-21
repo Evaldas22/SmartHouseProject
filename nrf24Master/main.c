@@ -110,6 +110,7 @@ int ConvertIntToHex(uint8_t integer);
 volatile uint8_t sendSuccessfully = 0;
 volatile uint8_t sendingRelayCommand = 0;
 RelayArray arr, notFoundRelays;
+int device1 = 0, device2 = 1;
 
 uint8_t relayState;
 uint8_t ATMEGA16On = 0, ATMEGA16_2On = 0;
@@ -157,11 +158,11 @@ int main()
 
     printf("After query. There are total %d relays\n", arr.used);
 
-    CheckIfDeviceIsOn(ATMEGA16);
+    //CheckIfDeviceIsOn(ATMEGA16);
     if(ATMEGA16On) printf("ATMEGA16 is ON\n");
     else printf("ATMEGA16 is OFF\n");
 
-    //CheckIfDeviceIsOn(ATMEGA16_2);
+    CheckIfDeviceIsOn(ATMEGA16_2);
     if(ATMEGA16_2On) printf("ATMEGA16_2 is ON\n");
     else printf("ATMEGA16_2 is OFF\n");
 
@@ -218,10 +219,12 @@ int main()
     // after relays are synced make a copy of data
     CopyAllDataToTempDB();
 
+    /*
     // send command to turn of PIR sensor
     printf("Turning OFF PIR sensor\n");
     uint8_t command[5] = {0x41, 0x42, 0x43, TURN_OFF_PIR, 0x16};
     SendRequestTo(command);
+    */
 
     // start server
     const char *cmd = "gnome-terminal --command=\"./runServer\" ";
@@ -236,8 +239,8 @@ int main()
             firstTime = 0;
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            SendRequestTo(atmega16DHT11);
-            //SendRequestTo(atmega16_2DHT11);
+            //SendRequestTo(atmega16DHT11);
+            SendRequestTo(atmega16_2DHT11);
             printf("Updating DB\n");
 
             char temp[200];
@@ -257,8 +260,8 @@ int main()
         {
             startTime = myTime;
             printf("\nTime: %s\n", ctime(&myTime));
-            SendRequestTo(atmega16DHT11);
-            //SendRequestTo(atmega16_2DHT11);
+            //SendRequestTo(atmega16DHT11);
+            SendRequestTo(atmega16_2DHT11);
             printf("Updating DB\n");
 
             char temp[200];
@@ -312,12 +315,14 @@ void ToggleRelay(uint8_t whichDevice, Relay whichRelay, int state)
         retries++;
     } while((state != relayState) && retries < MAX_RETRIES);
 
+    printf("Start to update\n");
     // we need to update the db
     char *value = (relayState == 1) ? "ON" : "OFF";
     char temp[200];
     sprintf(temp, "UPDATE things SET value = '%s' where id = %d; DELETE FROM thingsTemp; INSERT INTO thingsTemp SELECT * FROM things;", value, whichRelay.id);
     sql = temp;
     sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+    printf("Done updating\n");
 }
 
 void FindRelayStatus(uint8_t whichDevice, Relay whichRelay)
@@ -540,10 +545,21 @@ static int InitializeAllData(void *data, int columns, char **argv, char **colNam
             sprintf(relayName, "relay%d", r.id);
             strcpy(r.name, relayName);
 
-            r.command = RELAY1_STATE + arr.used;
+            if((atoi (argv[4])) == 17)
+            {
+                r.command = ConvertIntToHex(ATMEGA16_2) + device2;
+                device2++;
+            }
+            else
+            {
+                r.command = RELAY1_STATE + device1;
+                device1++;
+            }
             r.state = (strcmp(argv[3], "ON") == 0) ? 1 : 0;
             r.device = atoi (argv[4]); // must be number
             insertRelayArray(&arr, r);
+
+            printf("%s command is %x\n", r.name, r.command);
         }
     }
     return 0;
@@ -565,8 +581,8 @@ static int CompareTables(void *data, int columns, char **argv, char **colNames)
             {
                 if(arr.array[i].id == id)
                 {
-                    printf("%s\n", argv[2]);
                     if(strcmp(argv[2], "Not responded") == 0) continue;
+
                     int stateThatShouldBe = (strcmp(argv[2], "ON") == 0) ? 1 : 0;
                     printf("State should be: %d\n", stateThatShouldBe);
                     ToggleRelay(arr.array[i].device, arr.array[i], stateThatShouldBe);
@@ -583,7 +599,16 @@ static int CompareTables(void *data, int columns, char **argv, char **colNames)
                     sprintf(relayName, "relay%d", r.id);
                     strcpy(r.name, relayName);
 
-                    r.command = RELAY1_STATE + arr.used;
+                    if((atoi (argv[3])) == 17)
+                    {
+                        r.command = ConvertIntToHex(ATMEGA16_2) + device2;
+                        device2++;
+                    }
+                    else
+                    {
+                        r.command = RELAY1_STATE + device1;
+                        device1++;
+                    }
                     r.state = (strcmp(argv[2], "ON") == 0) ? 1 : 0;
                     r.device = atoi (argv[3]); // must be number
                     insertRelayArray(&arr, r);
