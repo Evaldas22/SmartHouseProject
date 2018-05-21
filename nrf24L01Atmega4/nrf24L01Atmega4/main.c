@@ -24,14 +24,22 @@
 // ---------------------------------------------------------------
 
 // ---------------------------defines-----------------------------
-#define DEVICE_ADDR 0x17
-#define DEVICE_ANSWER_START 0x31
+#define DEVICE_ADDR				0x17
+#define DEVICE_ANSWER_START		0x31
 
-#define DHT22_PIN PC0
+#define FIND_STATE				0x52
+#define RELAY_TOGGLE			0x51
+#define RELAY1_STATE			DEVICE_ADDR + 1
+#define RELAY2_STATE			DEVICE_ADDR + 2
+#define ERROR					0x05
 
-#define MAX_RETRIES 10
+#define DHT22_PIN				PC0
+#define RELAY_IN1				PA0
+#define RELAY_IN2				PA1
 
-#define DHT22_REQUEST 0x70
+#define MAX_RETRIES				10
+
+#define DHT22_REQUEST			0x70
 // ---------------------------------------------------------------
 
 // --------------------------Functions----------------------------
@@ -40,9 +48,12 @@ void SendAnswer();
 void SendDHTData();
 uint8_t CheckInput(unsigned char PIN, unsigned char pinToCheck);
 void convertToIntArray(double *doubleArray, int *values);
+void initRelays(uint8_t *relayPins);
+void ToggleLights(uint8_t relay);
 // ---------------------------------------------------------------
 // ------------------------GLOBAL VARIABLES-----------------------------------
 volatile uint8_t successfullySend = 0;
+uint8_t lastRelay1State;
 
 // global var for DHT11 sensor
 
@@ -66,6 +77,9 @@ int main(void)
 
 	// flush any IRQs from nrf before begining
 	resetNrf();
+	
+	uint8_t relays[] = {RELAY_IN1, RELAY_IN2};
+	initRelays(relays);
 	
 	Uart_Send_String("Working\n");
 	
@@ -118,6 +132,41 @@ ISR(INT0_vect)
 	{		
 		if(data[3] == DHT22_REQUEST) SendDHTData();
 		
+		else if(data[3] == RELAY_TOGGLE)
+		{
+			if(data[2] == RELAY1_STATE)
+			{
+				ToggleLights(RELAY_IN1);
+				lastRelay1State = !(CheckInput(PINA, RELAY_IN1));
+			}
+			else if(data[2] == RELAY2_STATE)
+			{
+				ToggleLights(RELAY_IN2);
+				lastRelay1State = !(CheckInput(PINA, RELAY_IN2));
+			}
+		}
+		
+		else if(data[3] == FIND_STATE)
+		{
+			if(data[2] == RELAY1_STATE)
+			{
+				uint8_t stateRelay1 = !(CheckInput(PINA, RELAY_IN1));
+				uint8_t stateAnswer[5] = {0x41, 0x42, 0x43, 0x44, stateRelay1};
+				SendAnswer(stateAnswer);
+			}
+			else if(data[2] == RELAY2_STATE)
+			{
+				uint8_t stateRelay1 = !(CheckInput(PINA, RELAY_IN2));
+				uint8_t stateAnswer[5] = {0x41, 0x42, 0x43, 0x44, stateRelay1};
+				SendAnswer(stateAnswer);
+			}
+			else
+			{
+				uint8_t stateAnswer[5] = {0x41, 0x42, 0x43, 0x44, ERROR};
+				SendAnswer(stateAnswer);
+			}
+		}
+		
 		else SendAnswer(defaultAnswer);
 	}
 	
@@ -160,6 +209,31 @@ void convertToIntArray(double* doubleArray, int *values)
 	
 	values[0] = a;
 	values[1] = b;
+}
+
+void initRelays(uint8_t *relayPins)
+{
+	for (int i = 0; i < (sizeof(relayPins) / sizeof(uint8_t)); i++)
+	{
+		set_bit(DDRA, relayPins[i]); // OUTPUT
+		set_bit(PORTA, relayPins[i]); // HIGH
+	}
+}
+
+void ToggleLights(uint8_t relay)
+{
+	switch(relay)
+	{
+		case RELAY_IN1:
+			invert_bit(PORTA, RELAY_IN1);
+			_delay_ms(50);
+			break;
+			
+		case RELAY_IN2:
+			invert_bit(PORTA, RELAY_IN2);
+			_delay_ms(50);
+			break;
+	}
 }
 
 

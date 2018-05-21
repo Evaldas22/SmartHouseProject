@@ -68,3 +68,7 @@ appropriate relay to match the difference. So whenever a user pushes a button in
 -----------------------------------------------------------------------------------------------------------------------------------------------
 EDIT 10: Added functionality to only check specific device lights if that device responds. Also added new command to turn on/off PIR sensor, because if you move a lot
 you'll be spammed with PIR messages, saying that PIR is triggered. Cleaned up code, added some helper functions.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------
+EDIT11: Added functionality to add new relays into relay struct. Modified relay command assignment operation. Device 1 relays will have 0xF1 + x command. Device 2 - 0x17 + x.
+Added second sensor module block, called Atmega4. I has two relays and DHT22 sensor. UI and command control program still have issues with DB locking.
