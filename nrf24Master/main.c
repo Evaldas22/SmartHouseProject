@@ -81,7 +81,7 @@ void freeRelayArray(RelayArray *a) {
 #define TURN_OFF_PIR 0xA1
 #define TURN_ON_PIR 0xA0
 
-#define TIME_INTERVAL_SEC 60
+#define TIME_INTERVAL_SEC 60*3 // 3 minutes
 #define MAX_RETRIES 10
 
 #define ATMEGA16 16
@@ -98,7 +98,6 @@ void ToggleRelay(uint8_t whichDevice, Relay whichRelay, int state);
 void FindRelayStatus(uint8_t whichDevice, Relay whichRelay);
 void SendRequestTo(uint8_t *addr);
 void Receive_data(int command);
-void ISR();
 static int CallbackDummy(void *data, int columns, char **argv, char **colNames);
 static int CompareTables(void *data, int columns, char **argv, char **colNames);
 static int InitializeAllData(void *data, int columns, char **argv, char **colNames);
@@ -155,10 +154,11 @@ int main()
 
     sql = "SELECT * FROM things;";
     status = sqlite3_exec(db, sql, InitializeAllData, (void *) message, &errMsg);
+    printf("%s\n", sql);
 
     printf("After query. There are total %d relays\n", arr.used);
 
-    //CheckIfDeviceIsOn(ATMEGA16);
+    CheckIfDeviceIsOn(ATMEGA16);
     if(ATMEGA16On) printf("ATMEGA16 is ON\n");
     else printf("ATMEGA16 is OFF\n");
 
@@ -187,12 +187,14 @@ int main()
         // if received relay state doesnt match with the one in db - update db
         else if(relayState != arr.array[i].state){
             // update state in db
+            arr.array[i].state = relayState;
             printf("Updating state in DB\n");
             char *value = (relayState) ? "ON" : "OFF";
             char temp[200];
             sprintf(temp, "UPDATE things SET value = '%s' WHERE id = %d;", value, arr.array[i].id);
             sql = temp;
             status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+            printf("%s\n", sql);
         }
     }
 
@@ -215,20 +217,19 @@ int main()
     }
     // now exucute the UPDATE query
     status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+    printf("%s\n", sql);
 
     // after relays are synced make a copy of data
     CopyAllDataToTempDB();
 
-    /*
     // send command to turn of PIR sensor
     printf("Turning OFF PIR sensor\n");
     uint8_t command[5] = {0x41, 0x42, 0x43, TURN_OFF_PIR, 0x16};
     SendRequestTo(command);
-    */
+
 
     // start server
-    const char *cmd = "gnome-terminal --command=\"./runServer\" ";
-    system(cmd);
+    system("gnome-terminal --command=\"./runServer\" ");
 
     while (1)
     {
@@ -239,20 +240,21 @@ int main()
             firstTime = 0;
             startTime = myTime;
             printf("\nTime when sent: %s\n", ctime(&myTime));
-            //SendRequestTo(atmega16DHT11);
-            SendRequestTo(atmega16_2DHT11);
+
+            SendRequestTo(atmega16DHT11);
+            //SendRequestTo(atmega16_2DHT11);
+
             printf("Updating DB\n");
 
-            char temp[200];
+            char temp[200], temp1[200];
             sprintf(temp, "UPDATE things SET value = '%s' where name = 'Temperature';", temperature);
-            sql = temp;
-            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+            sprintf(temp1, "UPDATE things SET value = '%s' where name = 'Humidity';", humidity);
 
-            sprintf(temp, "UPDATE things SET value = '%s' where name = 'Humidity';", humidity);
             sql = temp;
-            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+            strcat(sql, temp1);
 
-            //CopyAllDataToTempDB();
+            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+            printf("%s\n", sql);
         }
 
         // when set time interval is past do this
@@ -260,20 +262,20 @@ int main()
         {
             startTime = myTime;
             printf("\nTime: %s\n", ctime(&myTime));
-            //SendRequestTo(atmega16DHT11);
-            SendRequestTo(atmega16_2DHT11);
+
+            SendRequestTo(atmega16DHT11);
+            //SendRequestTo(atmega16_2DHT11);
             printf("Updating DB\n");
 
-            char temp[200];
+            char temp[200], temp1[200];
             sprintf(temp, "UPDATE things SET value = '%s' where name = 'Temperature';", temperature);
-            sql = temp;
-            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+            sprintf(temp1, "UPDATE things SET value = '%s' where name = 'Humidity';", humidity);
 
-            sprintf(temp, "UPDATE things SET value = '%s' where name = 'Humidity';", humidity);
             sql = temp;
-            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+            strcat(sql, temp1);
 
-            //CopyAllDataToTempDB();
+            status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+            printf("%s\n", sql);
         }
 
         //--------------COMPARE TWO TABLES------------------------
@@ -311,17 +313,25 @@ void ToggleRelay(uint8_t whichDevice, Relay whichRelay, int state)
         SendRequestTo(commandToSend);
         FindRelayStatus(whichDevice, whichRelay);
 
-        //printf("State should be: %d and is right now: %d\n", state, relayState);
+        printf("State should be: %d and is right now: %d\n", state, relayState);
+        if(relayState == 2)
+        {
+            printf("Relay does not respond\n");
+            break;
+        }
         retries++;
-    } while((state != relayState) && retries < MAX_RETRIES);
+    } while((state != relayState) && retries < MAX_RETRIES-5);
 
     printf("Start to update\n");
     // we need to update the db
     char *value = (relayState == 1) ? "ON" : "OFF";
+    if(relayState == 2) value = "Not responded";
     char temp[200];
-    sprintf(temp, "UPDATE things SET value = '%s' where id = %d; DELETE FROM thingsTemp; INSERT INTO thingsTemp SELECT * FROM things;", value, whichRelay.id);
+    sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, whichRelay.id);
     sql = temp;
     sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+    printf("%s\n", sql);
+    CopyAllDataToTempDB();
     printf("Done updating\n");
 }
 
@@ -343,12 +353,13 @@ void SendRequestTo(uint8_t *addr)
     {
         if(addr[3] == RELAY_TOGGLE)
         {
-            sendingRelayCommand = 1; // must set this before sending
+            //sendingRelayCommand = 1; // must set this before sending
+            sendSuccessfully = 1;
         }
 
         printf("Retries: %d\n", retries);
         transmit_data(addr);
-        //_delay_ms(5);
+        _delay_ms(5);
 
         changeNrfToRX();
         // depends on command addr what command option to pass
@@ -370,7 +381,7 @@ void Receive_data(int command)
     ReadWriteNRF(W, FLUSH_RX, dummy, 0); // clear the RX buffer
 
 	set_bit(CE); // enable for listening
-	_delay_ms(700); // listen for 1s
+	_delay_ms(1700); // listen for 1s
 	clear_bit(CE); // stop listening
 
 	// create empty array
@@ -395,7 +406,6 @@ void Receive_data(int command)
             // regular respnse arrived
             if(command == REGULAR)
             {
-
                 ATMEGA16On = 1;
             }
             // dht11 sensor response arrived
@@ -430,12 +440,12 @@ void Receive_data(int command)
 
                         sendingRelayCommand = 0;
                         // send response that state update message was received
-                        changeNrfToTX();
                         uint8_t gotMessage[5] = {0x41, 0x42, 0x43, STATE_UPDATE_ANSWER, 0x16};
                         printf("Sending answer back...\n");
+                        changeNrfToTX();
                         transmit_data(gotMessage);
                         changeNrfToRX();
-                        _delay_ms(100);
+                        _delay_ms(100); // why 100??
 
                         printf("Updating state in DB\n");
                         char *value = (relayState) ? "ON" : "OFF";
@@ -498,6 +508,25 @@ void Receive_data(int command)
                 sprintf(temperature, "%d", receivedData[1]);
                 sprintf(humidity, "%d", receivedData[3]);
             }
+            else if(command == FIND_STATE_COM)
+            {
+                if (receivedData[4] == ERROR)
+                {
+                    printf("Relay is not available\n");
+                    relayState = 2;
+                }
+                else if(receivedData[4])
+                {
+                    printf("Now relay is ON.\n");
+                    relayState = 1;
+                }
+                else
+                {
+                    printf("Now relay is OFF.\n");
+                    relayState = 0;
+                }
+            }
+            else printf("Command not recognised\n");
         }
 
 	}
@@ -510,24 +539,13 @@ void Receive_data(int command)
 	resetNrf();
 }
 
-// this ISR will be launched when packet succesfully sent
-void ISR()
-{
-    // if relay command is being sent
-    if(sendingRelayCommand)
-    {
-        sendSuccessfully = 1;
-        // invert relayState
-        relayState = (relayState == 1) ? 0 : 1;
-    }
-}
-
 void CopyAllDataToTempDB()
 {
     //printf("Now copying data to temp db\n");
     // this would be executed after all command have been sent
     char *sql = "DELETE FROM thingsTemp; INSERT INTO thingsTemp SELECT * FROM things;";
     sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+    printf("%s\n", sql);
 }
 
 static int InitializeAllData(void *data, int columns, char **argv, char **colNames)
@@ -559,7 +577,7 @@ static int InitializeAllData(void *data, int columns, char **argv, char **colNam
             r.device = atoi (argv[4]); // must be number
             insertRelayArray(&arr, r);
 
-            printf("%s command is %x\n", r.name, r.command);
+            printf("%s command is %x and value %s\n", r.name, r.command, argv[3]);
         }
     }
     return 0;
@@ -586,7 +604,7 @@ static int CompareTables(void *data, int columns, char **argv, char **colNames)
                     int stateThatShouldBe = (strcmp(argv[2], "ON") == 0) ? 1 : 0;
                     printf("State should be: %d\n", stateThatShouldBe);
                     ToggleRelay(arr.array[i].device, arr.array[i], stateThatShouldBe);
-                    arr.array[i].state = stateThatShouldBe;
+                    arr.array[i].state = relayState;
                     break;
                 }
                 if(i == arr.used-1)
@@ -623,7 +641,6 @@ static int CompareTables(void *data, int columns, char **argv, char **colNames)
                         sprintf(temp, "UPDATE things SET value = 'Not responded' WHERE id=%d;", arr.array[i+1].id);
                         printf("%s\n", temp);
                         sql = temp;
-                        //int status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
                         sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
                         argv[2] = "Not responded";
                     }
@@ -635,7 +652,6 @@ static int CompareTables(void *data, int columns, char **argv, char **colNames)
                         char temp[200];
                         sprintf(temp, "UPDATE things SET value = '%s' WHERE id = %d;", value, arr.array[i+1].id);
                         sql = temp;
-                        //int status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
                         sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
                     }
 
@@ -701,11 +717,11 @@ void Setup()
 	}
 
     // setup external interrupt
-	if(wiringPiSetup() < 0) exit(1);
+	/*if(wiringPiSetup() < 0) exit(1);
 	if(wiringPiISR(IRQ_PIN, INT_EDGE_FALLING, &ISR) < 0)
     {
         printf("Unable to setup ISR \n");
-    }
+    }*/
 
 	// configure SPI
     bcm2835_spi_begin();
