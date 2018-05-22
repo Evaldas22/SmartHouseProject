@@ -151,18 +151,18 @@ ISR(INT0_vect)
 			if(data[2] == RELAY1_STATE)
 			{
 				uint8_t stateRelay1 = !(CheckInput(PINA, RELAY_IN1));
-				uint8_t stateAnswer[5] = {0x41, 0x42, 0x43, 0x44, stateRelay1};
+				uint8_t stateAnswer[5] = {0x31, 0x42, 0x43, 0x44, stateRelay1};
 				SendAnswer(stateAnswer);
 			}
 			else if(data[2] == RELAY2_STATE)
 			{
 				uint8_t stateRelay1 = !(CheckInput(PINA, RELAY_IN2));
-				uint8_t stateAnswer[5] = {0x41, 0x42, 0x43, 0x44, stateRelay1};
+				uint8_t stateAnswer[5] = {0x31, 0x42, 0x43, 0x44, stateRelay1};
 				SendAnswer(stateAnswer);
 			}
 			else
 			{
-				uint8_t stateAnswer[5] = {0x41, 0x42, 0x43, 0x44, ERROR};
+				uint8_t stateAnswer[5] = {0x31, 0x42, 0x43, 0x44, ERROR};
 				SendAnswer(stateAnswer);
 			}
 		}
