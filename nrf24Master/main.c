@@ -81,7 +81,7 @@ void freeRelayArray(RelayArray *a) {
 #define TURN_OFF_PIR 0xA1
 #define TURN_ON_PIR 0xA0
 
-#define TIME_INTERVAL_SEC 60*3 // 3 minutes
+#define TIME_INTERVAL_SEC 60*2 // 3 minutes
 #define MAX_RETRIES 10
 
 #define ATMEGA16 16
@@ -113,8 +113,8 @@ int device1 = 0, device2 = 1;
 
 uint8_t relayState;
 uint8_t ATMEGA16On = 0, ATMEGA16_2On = 0;
-char temperature[7];
-char humidity[7];
+char temperature[7], temperature_2[7];
+char humidity[7], humidity_2[7];
 
 // db variables
 const char* message = "Callback function called";
@@ -229,7 +229,7 @@ int main()
 
 
     // start server
-    system("gnome-terminal --command=\"./runServer\" ");
+    //system("gnome-terminal --command=\"./runServer\" ");
 
     while (1)
     {
@@ -242,7 +242,7 @@ int main()
             printf("\nTime when sent: %s\n", ctime(&myTime));
 
             SendRequestTo(atmega16DHT11);
-            //SendRequestTo(atmega16_2DHT11);
+            SendRequestTo(atmega16_2DHT11);
 
             printf("Updating DB\n");
 
@@ -252,7 +252,12 @@ int main()
 
             sql = temp;
             strcat(sql, temp1);
+            char temp2[200], temp3[200];
 
+            sprintf(temp2, "UPDATE things SET value = '%s' where name = 'Temperature1';", temperature_2);
+            sprintf(temp3, "UPDATE things SET value = '%s' where name = 'Humidity1';", humidity_2);
+            strcat(sql, temp2);
+            strcat(sql, temp3);
             status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
             printf("%s\n", sql);
         }
@@ -264,7 +269,8 @@ int main()
             printf("\nTime: %s\n", ctime(&myTime));
 
             SendRequestTo(atmega16DHT11);
-            //SendRequestTo(atmega16_2DHT11);
+            SendRequestTo(atmega16_2DHT11);
+
             printf("Updating DB\n");
 
             char temp[200], temp1[200];
@@ -273,6 +279,13 @@ int main()
 
             sql = temp;
             strcat(sql, temp1);
+
+            char temp2[200], temp3[200];
+
+            sprintf(temp2, "UPDATE things SET value = '%s' where name = 'Temperature1';", temperature_2);
+            sprintf(temp3, "UPDATE things SET value = '%s' where name = 'Humidity1';", humidity_2);
+            strcat(sql, temp2);
+            strcat(sql, temp3);
 
             status = sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
             printf("%s\n", sql);
@@ -326,12 +339,14 @@ void ToggleRelay(uint8_t whichDevice, Relay whichRelay, int state)
     // we need to update the db
     char *value = (relayState == 1) ? "ON" : "OFF";
     if(relayState == 2) value = "Not responded";
-    char temp[200];
+    char temp[500], temp1[300];
     sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, whichRelay.id);
+    sprintf(temp1, "UPDATE thingsTemp SET value = '%s' where id = %d;", value, whichRelay.id);
+    strcat(temp, temp1);
     sql = temp;
     sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
     printf("%s\n", sql);
-    CopyAllDataToTempDB();
+    //CopyAllDataToTempDB();
     printf("Done updating\n");
 }
 
@@ -449,12 +464,15 @@ void Receive_data(int command)
 
                         printf("Updating state in DB\n");
                         char *value = (relayState) ? "ON" : "OFF";
-                        char temp[200];
+                        char temp[500], temp1[200];
                         sprintf(temp, "UPDATE things SET value = '%s' where id = %d;", value, arr.array[i].id);
+                        sprintf(temp1, "UPDATE thingsTemp SET value = '%s' where id = %d;", value, arr.array[i].id);
+                        strcat(temp, temp1);
                         sql = temp;
                         sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+                        printf("%s\n", sql);
 
-                        CopyAllDataToTempDB();
+                        //CopyAllDataToTempDB();
                     }
                 }
 
@@ -505,8 +523,8 @@ void Receive_data(int command)
                 printf("Temperature: %d.%d\n", receivedData[1], receivedData[2]);
                 printf("Humdity: %d.%d\n\n\n", receivedData[3], receivedData[4]);
 
-                sprintf(temperature, "%d", receivedData[1]);
-                sprintf(humidity, "%d", receivedData[3]);
+                sprintf(temperature_2, "%d", receivedData[1]);
+                sprintf(humidity_2, "%d", receivedData[3]);
             }
             else if(command == FIND_STATE_COM)
             {
@@ -672,12 +690,15 @@ static int CompareTables(void *data, int columns, char **argv, char **colNames)
                     if(sendSuccessfully)
                     {
                         printf("Updating state in DB\n");
-                        char temp[200];
+                        char temp[500], temp1[200];
                         sprintf(temp, "UPDATE things SET value = 'ON' where id = %d;", atoi(argv[0]));
+                        sprintf(temp1, "UPDATE thingsTemp SET value = 'ON' where id = %d;", atoi(argv[0]));
+                        strcat(temp, temp1);
                         sql = temp;
                         sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+                        printf("%s\n", sql);
 
-                        CopyAllDataToTempDB();
+                        //CopyAllDataToTempDB();
                     }
                 }
 
@@ -690,12 +711,15 @@ static int CompareTables(void *data, int columns, char **argv, char **colNames)
                     if(sendSuccessfully)
                     {
                         printf("Updating state in DB\n");
-                        char temp[200];
+                        char temp[500], temp1[200];
                         sprintf(temp, "UPDATE things SET value = 'OFF' where id = %d;", atoi(argv[0]));
+                        sprintf(temp1, "UPDATE thingsTemp SET value = 'OFF' where id = %d;", atoi(argv[0]));
+                        strcat(temp, temp1);
                         sql = temp;
                         sqlite3_exec(db, sql, CallbackDummy, (void *) message, &errMsg);
+                        printf("%s\n", sql);
 
-                        CopyAllDataToTempDB();
+                        //CopyAllDataToTempDB();
                     }
                 }
             }
